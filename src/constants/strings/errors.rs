@@ -1,0 +1,1 @@
+pub const COMMAND_NOT_PROVIDED_MESSAGE: &str = "Command is not provided. Please run `hants help` to get the full list of commands supported by hants.";
