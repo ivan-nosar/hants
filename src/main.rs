@@ -26,7 +26,7 @@ fn main() {
 
     log::debug!("Running `hants` command: {}; Command args: {:?}", raw_args.command, raw_args.command_args);
 
-    let command = match commands::command_resolver::resolve_command(&raw_args.command) {
+    let command = match commands::registered_commands::resolve_command(&raw_args.command) {
         Ok(command) => command,
         Err(error_message) => {
             log::error!("{error_message}");

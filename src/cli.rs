@@ -31,7 +31,8 @@ pub fn parse_raw_args(args: &Vec<String>) -> Result<RawArgs, &'static str> {
 pub fn setup_logger<'a>() -> Result<(), &'a str> {
     // TODO: Allow specifying log level
     // TODO: Use different formats for debug and release build configurations.
-    // TODO: implement better output with `colored` crate. Default logging isn't quite suitable for good formatting.
+    // TODO: Implement better output with `colored` crate. Default logging isn't quite suitable for good formatting.
+    // TODO: Another option for implementation: `crossterm` or `ratatui` crates.
     let colors = ColoredLevelConfig::new()
         .trace(Color::White)
         .debug(Color::Blue)

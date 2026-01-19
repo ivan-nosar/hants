@@ -12,7 +12,7 @@ hants [command] [options...]
 
 ### Help
 
-Use `help` command to get the usage instructions:
+Use `help` command to get the usage instructions.
 
 ```sh
 hants help

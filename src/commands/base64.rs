@@ -24,6 +24,6 @@ impl Command for Base64 {
     }
 
     fn get_help(&self) -> String {
-        todo!()
+        String::from("")
     }
 }
