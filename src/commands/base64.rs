@@ -22,8 +22,4 @@ impl Command for Base64 {
     fn parse_args(&self, args_map: &[String]) {
         todo!()
     }
-
-    fn get_help(&self) -> String {
-        String::from("")
-    }
 }
