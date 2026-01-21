@@ -1,1 +1,0 @@
-pub const HELP_COMMAND_PARSE_ARGS_MESSAGE: &str = "'help' command doesn't accept any arguments";

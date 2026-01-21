@@ -18,8 +18,4 @@ impl Command for Help {
 
         Ok(())
     }
-
-    fn parse_args(&self, _: &[String]) {
-        dbg!(constants::strings::debug::HELP_COMMAND_PARSE_ARGS_MESSAGE);
-    }
 }

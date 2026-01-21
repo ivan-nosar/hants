@@ -18,7 +18,7 @@ fn main() {
 
     dbg!(raw_args.command, raw_args.command_args);
 
-    let command = match commands::registered_commands::resolve_command(&raw_args.command) {
+    let command = match commands::registered_commands::resolve_command(&raw_args) {
         Ok(command) => command,
         Err(error_message) => {
             eprintln!("{error_message}");
@@ -26,7 +26,6 @@ fn main() {
         }
     };
 
-    command.parse_args(raw_args.command_args);
     match command.execute() {
         Ok(_) => (),
         Err(error_message) => {
