@@ -36,13 +36,15 @@ jobs:
         uses: actions/checkout@v4
 
       # The `clipboard` crate links against X11/xcb on Linux, so the X11
-      # development libraries must be present before building. Windows and
+      # development libraries must be present before building. Same applies
+      # to the XCB lib which is required to build sources in Ubuntu. Windows and
       # macOS use native clipboard APIs and need no extra system packages.
+      # TODO: Clipboard output doesn't work in Ubuntu. Validate and fix this.
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xorg-dev
+          sudo apt-get install -y xorg-dev libxcb-shape0-dev libxcb-render0-dev libxcb-xfixes0-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
