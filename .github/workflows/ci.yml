@@ -1,0 +1,87 @@
+name: Rust build pipeline
+
+# Run on every commit pushed to main and on every commit added to a pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs for the same branch/PR to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned Rust toolchain version installed across all matrix jobs.
+  RUST_VERSION: "1.96.0"
+
+jobs:
+  build-test-coverage:
+    name: Build, test & coverage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Keep running the other platforms even if one fails.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    defaults:
+      run:
+        # Force bash on every platform so the shell scripts below are portable
+        # (Windows runners default to PowerShell otherwise).
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The `clipboard` crate links against X11/xcb on Linux, so the X11
+      # development libraries must be present before building. Windows and
+      # macOS use native clipboard APIs and need no extra system packages.
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorg-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release profile)
+        run: cargo build --release --verbose
+
+      # Run the test suite under coverage instrumentation. `--no-report` runs
+      # all tests and records profiling data without rendering a report yet,
+      # so the test run is not duplicated by the coverage step below.
+      - name: Run tests
+        run: cargo llvm-cov --no-report
+
+      # Render the coverage report from the data collected above: print a
+      # summary to the job log and the GitHub step summary, and emit lcov.info.
+      - name: Evaluate coverage
+        run: |
+          cargo llvm-cov report --summary-only | tee coverage-summary.txt
+          {
+            echo '### Coverage summary'
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.os }}
+          path: |
+            lcov.info
+            coverage-summary.txt
