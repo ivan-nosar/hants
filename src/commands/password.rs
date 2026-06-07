@@ -47,7 +47,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<(), String> {
-    if args.length == 0 {
+    if args.length <= 0 {
         return Err("length must be greater than 0".to_string());
     }
 
@@ -63,4 +63,107 @@ pub fn run(args: Args) -> Result<(), String> {
     let password = generate_password(args.length, chars, args.seed);
 
     write_output(args.output, password)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run, Args};
+    use crate::io::output::OutputTarget;
+    use std::collections::HashSet;
+    use tempfile::tempdir;
+
+    /// Characters allowed by the "aAn" classes (latin letters and digits).
+    fn alphanumeric_set() -> HashSet<char> {
+        ('a'..='z').chain('A'..='Z').chain('0'..='9').collect()
+    }
+
+    #[test]
+    fn returns_err_when_length_is_zero() {
+        let args = Args {
+            length: 0,
+            symbol_classes: "aAn".to_string(),
+            seed: None,
+            output: OutputTarget::Console,
+        };
+
+        assert!(run(args).is_err());
+    }
+
+    #[test]
+    fn returns_err_when_symbol_classes_is_empty() {
+        let args = Args {
+            length: 12,
+            symbol_classes: String::new(),
+            seed: None,
+            output: OutputTarget::Console,
+        };
+
+        assert!(run(args).is_err());
+    }
+
+    #[test]
+    fn returns_err_when_symbol_classes_contains_unknown_class() {
+        for classes in ["Z", "aZ", "aAnX", "1"] {
+            let args = Args {
+                length: 12,
+                symbol_classes: classes.to_string(),
+                seed: None,
+                output: OutputTarget::Console,
+            };
+
+            assert!(run(args).is_err(), "expected Err for classes '{classes}'");
+        }
+    }
+
+    #[test]
+    fn same_seed_produces_same_password() {
+        let dir = tempdir().unwrap();
+        let first_path = dir.path().join("first.txt");
+        let second_path = dir.path().join("second.txt");
+
+        run(Args {
+            length: 24,
+            symbol_classes: "aAn".to_string(),
+            seed: Some(777),
+            output: OutputTarget::File(first_path.clone()),
+        })
+        .unwrap();
+        run(Args {
+            length: 24,
+            symbol_classes: "aAn".to_string(),
+            seed: Some(777),
+            output: OutputTarget::File(second_path.clone()),
+        })
+        .unwrap();
+
+        let first = std::fs::read_to_string(first_path).unwrap();
+        let second = std::fs::read_to_string(second_path).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn produces_password_of_requested_length_using_only_requested_classes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("password.txt");
+        let length: usize = 64;
+
+        run(Args {
+            length,
+            symbol_classes: "aAn".to_string(),
+            seed: Some(2_024),
+            output: OutputTarget::File(path.clone()),
+        })
+        .unwrap();
+
+        let password = std::fs::read_to_string(path).unwrap();
+        let allowed = alphanumeric_set();
+
+        assert_eq!(password.chars().count(), length);
+        for ch in password.chars() {
+            assert!(
+                allowed.contains(&ch),
+                "unexpected char {ch:?} not in requested classes"
+            );
+        }
+    }
 }
