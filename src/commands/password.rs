@@ -47,7 +47,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<(), String> {
-    if args.length <= 0 {
+    if args.length == 0 {
         return Err("length must be greater than 0".to_string());
     }
 

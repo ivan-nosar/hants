@@ -5,7 +5,7 @@ use rand::SeedableRng;
 pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<u64>) -> String {
     // TODO: The current implementation is naive and does not provide a sufficient level of security.
     // TODO: In particular, it does not ensure that all classes of symbols are represented in the output.
-    // TODO: This must be fixed. Suggested implementation is Chrominum's `GenerateMaxEntropyPassword`:
+    // TODO: This must be fixed. Suggested implementation is Chromium's `GenerateMaxEntropyPassword`:
     // TODO: https://github.com/chromium/chromium/blob/d4fb2e185f2e984d03200fd0b49086201ac71478/components/password_manager/core/browser/generation/password_generator.cc#L94
     // TODO: Add minimum one symbol of every class, fill the remaining space with random symbols
     // TODO: from all classes, then shuffle the resulting string to ensure high entropy. 
