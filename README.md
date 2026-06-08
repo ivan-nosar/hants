@@ -119,6 +119,5 @@ Options:
 
 Built with Rust, this tool relies on a minimal set of external dependencies and avoids direct use of platform-specific APIs, ensuring maximum portability.
 
-- [`clipboard`](https://crates.io/crates/clipboard): Cross-platform library for getting and setting the contents of the OS-level clipboard.
-  - Requires the x11 library installation on Linux: `sudo apt-get install xorg-dev`
+- [`arboard`](https://crates.io/crates/arboard): Cross-platform library for getting and setting the contents of the OS-level clipboard.
 - [`clap`](https://crates.io/crates/clap): A simple to use, efficient, and full-featured Command Line Argument Parser

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use clipboard::{ClipboardContext, ClipboardProvider};
+use arboard::Clipboard;
 
 #[derive(Clone)]
 pub enum OutputTarget {
@@ -22,9 +22,10 @@ pub fn write_output(target: OutputTarget, content: String) -> Result<(), String>
     match target {
         OutputTarget::Console => println!("{}", content),
         OutputTarget::Clipboard => {
-            let mut ctx: ClipboardContext =
-                ClipboardProvider::new().map_err(|e| e.to_string())?;
-            ctx.set_contents(content).map_err(|e| e.to_string())?;
+            let mut clipboard =
+                Clipboard::new().map_err(|err| err.to_string())?;
+            clipboard.set_text(content).map_err(|e| e.to_string())?;
+
         }
         OutputTarget::File(path) => {
             if path.exists() {
