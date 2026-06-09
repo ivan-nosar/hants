@@ -119,5 +119,6 @@ Options:
 
 Built with Rust, this tool relies on a minimal set of external dependencies and avoids direct use of platform-specific APIs, ensuring maximum portability.
 
-- [`arboard`](https://crates.io/crates/arboard): Cross-platform library for getting and setting the contents of the OS-level clipboard.
+- [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard): Cross-platform library for getting and setting the contents of the OS-level clipboard.
+<!-- TODO: This library is also seem to be abandoned. Possible replacement: https://crates.io/crates/hjkl-clipboard-->
 - [`clap`](https://crates.io/crates/clap): A simple to use, efficient, and full-featured Command Line Argument Parser

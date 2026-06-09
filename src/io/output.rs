@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
-use arboard::Clipboard;
+// TODO: Works unstable on Linux: first attempt can write output to clipboard,
+// TODO: but repeated calls will not write anything.
+use hjkl_clipboard::{Clipboard, MimeType, Selection};
 
 #[derive(Clone)]
 pub enum OutputTarget {
@@ -22,10 +24,14 @@ pub fn write_output(target: OutputTarget, content: String) -> Result<(), String>
     match target {
         OutputTarget::Console => println!("{}", content),
         OutputTarget::Clipboard => {
-            let mut clipboard =
+            // let mut clipboard =
+            //     Clipboard::new().map_err(|err| err.to_string())?;
+            // clipboard.set_text(content).map_err(|e| e.to_string())?;
+            let clipboard =
                 Clipboard::new().map_err(|err| err.to_string())?;
-            clipboard.set_text(content).map_err(|e| e.to_string())?;
-
+            clipboard
+                .set(Selection::Clipboard, MimeType::Text, content.as_bytes())
+                .map_err(|e| e.to_string())?;
         }
         OutputTarget::File(path) => {
             if path.exists() {
