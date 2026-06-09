@@ -19,7 +19,6 @@ pub enum Command {
 
     #[command(subcommand, about = "Encode/decode/validate Base64 content")]
     Base64(crate::commands::base64::Command),
-
     // TODO: Not yet implemented
     // Json(crate::commands::json::Args),
     // Jwt(crate::commands::jwt::Args),

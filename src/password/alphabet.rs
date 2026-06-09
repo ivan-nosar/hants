@@ -2,7 +2,7 @@ pub fn get_sorted_alphabet_chars(symbol_classes: String) -> Result<Vec<char>, St
     if symbol_classes.is_empty() {
         return Err("alphabet is empty".to_string());
     }
-    
+
     let mut alphabet = String::new();
     for ch in symbol_classes.chars() {
         let symbols = match ch {
@@ -22,7 +22,7 @@ pub fn get_sorted_alphabet_chars(symbol_classes: String) -> Result<Vec<char>, St
 
     let mut chars: Vec<char> = alphabet.chars().collect();
     chars.sort();
-    
+
     Ok(chars)
 }
 
@@ -64,7 +64,10 @@ mod tests {
             // The returned characters must be in ascending order.
             let mut expected_sorted = result.clone();
             expected_sorted.sort();
-            assert_eq!(result, expected_sorted, "result for '{case}' must be sorted");
+            assert_eq!(
+                result, expected_sorted,
+                "result for '{case}' must be sorted"
+            );
 
             // Every symbol of every requested class must be present.
             for class in case.chars() {

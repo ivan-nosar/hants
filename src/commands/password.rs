@@ -1,5 +1,5 @@
-use crate::io::output::{parse_output_option, write_output};
 use crate::io::output::OutputTarget;
+use crate::io::output::{parse_output_option, write_output};
 use crate::password::alphabet::get_sorted_alphabet_chars;
 use crate::password::generator::generate_password;
 
@@ -10,7 +10,8 @@ pub struct Args {
         long = "length",
         default_value_t = 12,
         allow_negative_numbers = false,
-        help = "The length of the password")]
+        help = "The length of the password"
+    )]
     length: usize,
 
     #[arg(
@@ -30,7 +31,11 @@ pub struct Args {
     )]
     symbol_classes: String,
 
-    #[arg(short = 's', long = "seed", help = "The seed for the random values generator")]
+    #[arg(
+        short = 's',
+        long = "seed",
+        help = "The seed for the random values generator"
+    )]
     seed: Option<u64>,
 
     #[arg(
@@ -51,10 +56,7 @@ pub fn run(args: Args) -> Result<(), String> {
         return Err("length must be greater than 0".to_string());
     }
 
-    let chars = match get_sorted_alphabet_chars(args.symbol_classes) {
-        Ok(chars) => chars,
-        Err(e) => return Err(e),
-    };
+    let chars = get_sorted_alphabet_chars(args.symbol_classes)?;
 
     if chars.is_empty() {
         return Err("alphabet is empty".to_string());
@@ -67,7 +69,7 @@ pub fn run(args: Args) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, Args};
+    use super::{Args, run};
     use crate::io::output::OutputTarget;
     use std::collections::HashSet;
     use tempfile::tempdir;

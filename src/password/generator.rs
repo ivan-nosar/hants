@@ -1,6 +1,6 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use rand::prelude::StdRng;
 use rand::SeedableRng;
+use rand::prelude::StdRng;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<u64>) -> String {
     // TODO: The current implementation is naive and does not provide a sufficient level of security.
@@ -8,7 +8,7 @@ pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<
     // TODO: This must be fixed. Suggested implementation is Chromium's `GenerateMaxEntropyPassword`:
     // TODO: https://github.com/chromium/chromium/blob/d4fb2e185f2e984d03200fd0b49086201ac71478/components/password_manager/core/browser/generation/password_generator.cc#L94
     // TODO: Add minimum one symbol of every class, fill the remaining space with random symbols
-    // TODO: from all classes, then shuffle the resulting string to ensure high entropy. 
+    // TODO: from all classes, then shuffle the resulting string to ensure high entropy.
     let seed = seed.unwrap_or_else(|| {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -53,7 +53,10 @@ mod tests {
 
         assert_eq!(password.chars().count(), length);
         for ch in password.chars() {
-            assert!(allowed.contains(&ch), "unexpected char {ch:?} not in alphabet");
+            assert!(
+                allowed.contains(&ch),
+                "unexpected char {ch:?} not in alphabet"
+            );
         }
     }
 }

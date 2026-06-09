@@ -1,6 +1,6 @@
+use arboard::Clipboard;
 use std::fs;
 use std::path::PathBuf;
-use arboard::Clipboard;
 
 #[derive(Clone)]
 pub enum OutputTarget {
@@ -22,10 +22,8 @@ pub fn write_output(target: OutputTarget, content: String) -> Result<(), String>
     match target {
         OutputTarget::Console => println!("{}", content),
         OutputTarget::Clipboard => {
-            let mut clipboard =
-                Clipboard::new().map_err(|err| err.to_string())?;
+            let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
             clipboard.set_text(content).map_err(|e| e.to_string())?;
-
         }
         OutputTarget::File(path) => {
             if path.exists() {
@@ -53,10 +51,11 @@ fn try_parse_file_output_option(option_value: &str) -> Result<OutputTarget, Stri
     // reserved characters (<>:"|?*) and similar issues surfaced by metadata lookups.
     if let Err(e) = path.canonicalize() {
         if e.kind() == std::io::ErrorKind::NotFound {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() && !parent.exists() {
-                    return Err(invalid_output_option_message(option_value));
-                }
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+                && !parent.exists()
+            {
+                return Err(invalid_output_option_message(option_value));
             }
             return Ok(OutputTarget::File(path));
         }
