@@ -2,6 +2,14 @@
 name = "hants"
 version = "0.1.0"
 edition = "2024"
+description = "HANdy ToolSet - A lightweight CLI utility that consolidates several small tools to streamline everyday development tasks."
+authors = ["Ivan Nosar"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ivan-nosar/hants"
+homepage = "https://github.com/ivan-nosar/hants"
+keywords = ["cli", "toolset", "password", "base64", "utility"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
@@ -18,3 +26,7 @@ lto = "fat"         # Enable Link-Time Optimization to strip dead code
 codegen-units = 1   # Maximize size reduction optimizations
 panic = "abort"     # Remove stack unwinding logic
 strip = true        # Strip debugging symbols
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
