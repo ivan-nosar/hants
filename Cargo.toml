@@ -11,6 +11,12 @@ homepage = "https://github.com/ivan-nosar/hants"
 keywords = ["cli", "toolset", "password", "base64", "utility"]
 categories = ["command-line-utilities"]
 
+[package.metadata.wix]
+upgrade-guid = "FB083FA5-2E65-4B8E-8114-3C6D24EC07D6"
+path-guid = "D2D643AC-522B-435B-A953-56B7257A8459"
+license = false
+eula = false
+
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 arboard = "3.6.1"
