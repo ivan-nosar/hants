@@ -1,6 +1,6 @@
 [package]
 name = "hants"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "HANdy ToolSet - A lightweight CLI utility that consolidates several small tools to streamline everyday development tasks."
 authors = ["Ivan Nosar"]
