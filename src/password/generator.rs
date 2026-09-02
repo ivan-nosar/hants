@@ -1,6 +1,6 @@
 use rand::SeedableRng;
 use rand::prelude::StdRng;
-use std::time::{SystemTime, UNIX_EPOCH};
+use rand::rngs::SysRng;
 
 pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<u64>) -> String {
     // TODO: The current implementation is naive and does not provide a sufficient level of security.
@@ -9,13 +9,14 @@ pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<
     // TODO: https://github.com/chromium/chromium/blob/d4fb2e185f2e984d03200fd0b49086201ac71478/components/password_manager/core/browser/generation/password_generator.cc#L94
     // TODO: Add minimum one symbol of every class, fill the remaining space with random symbols
     // TODO: from all classes, then shuffle the resulting string to ensure high entropy.
-    let seed = seed.unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
-    });
-    let mut rng = StdRng::seed_from_u64(seed);
+
+    // If seed is provided - use `seed_from_u64` with this seed. If not - use `SysRng` generator that
+    // retrieves cryptographically secure entropy from the host OS core - it's not bound directly to
+    // any externally-visible data (such as timestamps) and ensure cryptographic resistance.
+    let mut rng = match seed {
+        Some(seed) => { StdRng::seed_from_u64(seed) }
+        None => { StdRng::try_from_rng(&mut SysRng).unwrap() }
+    };
 
     (0..length)
         .map(|_| {
