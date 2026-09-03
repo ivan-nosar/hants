@@ -1,9 +1,10 @@
 use clap::Subcommand;
+use crate::base64::{encode};
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 pub enum Command {
     #[command(about = "Encode input sequence to Base64 format")]
-    Encode,
+    Encode(encode::Args),
 
     #[command(about = "Decode input Base64 sequence")]
     Decode,
@@ -13,6 +14,13 @@ pub enum Command {
 }
 
 pub fn run(command: Command) -> Result<(), String> {
-    println!("base64 {:?}: not implemented yet", command);
-    Ok(())
+    match command {
+        Command::Encode(args) => encode::run(args),
+        _ => {
+            println!("Not implemented yet");
+            Ok(())
+        }
+        // Command::Decode(args) => base64::run(args),
+        // Command::Validate(args) => base64::run(args)
+    }
 }

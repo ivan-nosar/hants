@@ -1,5 +1,4 @@
-use crate::io::output::OutputTarget;
-use crate::io::output::{parse_output_option, write_output};
+use crate::io::{IoTarget, parse_output_option, write_output};
 use crate::password::alphabet::get_sorted_alphabet_chars;
 use crate::password::generator::generate_password;
 
@@ -48,7 +47,7 @@ pub struct Args {
         \t\t      File must not exist prior to command execution\n",
         value_parser = parse_output_option,
         default_value = "clipboard")]
-    output: OutputTarget,
+    output: IoTarget,
 }
 
 pub fn run(args: Args) -> Result<(), String> {
@@ -70,7 +69,7 @@ pub fn run(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{Args, run};
-    use crate::io::output::OutputTarget;
+    use crate::io::IoTarget;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -85,7 +84,7 @@ mod tests {
             length: 0,
             symbol_classes: "aAn".to_string(),
             seed: None,
-            output: OutputTarget::Console,
+            output: IoTarget::Console,
         };
 
         assert!(run(args).is_err());
@@ -97,7 +96,7 @@ mod tests {
             length: 12,
             symbol_classes: String::new(),
             seed: None,
-            output: OutputTarget::Console,
+            output: IoTarget::Console,
         };
 
         assert!(run(args).is_err());
@@ -110,7 +109,7 @@ mod tests {
                 length: 12,
                 symbol_classes: classes.to_string(),
                 seed: None,
-                output: OutputTarget::Console,
+                output: IoTarget::Console,
             };
 
             assert!(run(args).is_err(), "expected Err for classes '{classes}'");
@@ -127,14 +126,14 @@ mod tests {
             length: 24,
             symbol_classes: "aAn".to_string(),
             seed: Some(777),
-            output: OutputTarget::File(first_path.clone()),
+            output: IoTarget::File(first_path.clone()),
         })
         .unwrap();
         run(Args {
             length: 24,
             symbol_classes: "aAn".to_string(),
             seed: Some(777),
-            output: OutputTarget::File(second_path.clone()),
+            output: IoTarget::File(second_path.clone()),
         })
         .unwrap();
 
@@ -153,7 +152,7 @@ mod tests {
             length,
             symbol_classes: "aAn".to_string(),
             seed: Some(2_024),
-            output: OutputTarget::File(path.clone()),
+            output: IoTarget::File(path.clone()),
         })
         .unwrap();
 
