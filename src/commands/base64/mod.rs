@@ -1,5 +1,6 @@
 use clap::Subcommand;
-use crate::base64::{encode};
+
+pub mod encode;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -11,6 +12,9 @@ pub enum Command {
 
     #[command(about = "Check if input string is a valid Base64 sequence")]
     Validate,
+
+    #[command(about = "Calculate the length of the Base64 encoded string for a given input. No encoding is performed.")]
+    Length,
 }
 
 pub fn run(command: Command) -> Result<(), String> {
@@ -22,5 +26,6 @@ pub fn run(command: Command) -> Result<(), String> {
         }
         // Command::Decode(args) => base64::run(args),
         // Command::Validate(args) => base64::run(args)
+        // Command::Length(args) => base64::run(args)
     }
 }

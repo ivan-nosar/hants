@@ -1,5 +1,6 @@
 use arboard::Clipboard;
 use std::fs;
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -17,7 +18,6 @@ pub fn parse_input_option(s: &str) -> Result<IoTarget, String> {
     parse_io_option(s, IoDirection::Input)
 }
 
-// TODO: Consider optimization for large output that might not fit memory (use streams?)
 pub fn write_output(target: IoTarget, content: String) -> Result<(), String> {
     match target {
         IoTarget::Console => println!("{}", content),
@@ -34,6 +34,24 @@ pub fn write_output(target: IoTarget, content: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn read_input(target: IoTarget) -> Result<String, String> {
+    match target {
+        IoTarget::Console => {
+            // TODO: Appends new-line symbol by end of the `buffer`. Debug through it and fix.
+            let mut buffer = String::new();
+            io::stdin().read_to_string(&mut buffer).map_err(|e| e.to_string())?;
+            Ok(buffer)
+        }
+        IoTarget::Clipboard => {
+            let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
+            clipboard.get_text().map_err(|e| e.to_string())
+        }
+        IoTarget::File(path) => {
+            fs::read_to_string(&path).map_err(|e| e.to_string())
+        }
+    }
 }
 
 fn parse_io_option(s: &str, direction: IoDirection) -> Result<IoTarget, String> {

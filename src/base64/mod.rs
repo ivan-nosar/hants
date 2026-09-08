@@ -1,2 +1,2 @@
-pub mod encode;
-pub mod core;
+pub mod alphabet;
+pub mod engine;
