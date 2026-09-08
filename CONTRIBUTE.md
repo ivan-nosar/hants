@@ -1,5 +1,62 @@
 # Contributing
 
+## Building
+
+Build an optimized binary with the release profile:
+
+```sh
+cargo build --release --verbose
+```
+
+## Linting
+
+Run Clippy for all targets and features:
+
+```sh
+cargo clippy --all-targets --all-features
+```
+
+Check formatting without changing files:
+
+```sh
+cargo fmt --all -- --check
+```
+
+Format the workspace in place:
+
+```sh
+cargo fmt --all
+```
+
+## Testing
+
+Run the complete test suite:
+
+```sh
+cargo test --all-targets --all-features
+```
+
+## Testing with Coverage
+
+Install [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) once:
+
+```sh
+cargo install cargo-llvm-cov
+```
+
+Run the test suite with coverage instrumentation, then print a summary:
+
+```sh
+cargo llvm-cov --no-report
+cargo llvm-cov report --summary-only
+```
+
+To generate a browsable HTML report instead, run:
+
+```sh
+cargo llvm-cov --html --open
+```
+
 ## Releasing a New Version
 
 HANTS uses `cargo dist` crate to support binary release process. Follow the [cargo-dist Rust quickstart](https://axodotdev.github.io/cargo-dist/book/quickstart/rust.html) and create a release with a tag in `**[0-9]+.[0-9]+.[0-9]+*` format:
