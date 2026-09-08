@@ -51,8 +51,8 @@ Options:
           The seed for the random values generator
   -o, --output <OUTPUT>
           The output location for the command result. Supported values:
-          - c / console:      Print output of the command to the standard console output
-          - cb / clipboard:   Write output of the command to the system clipboard
+          - c / console:      Print output of the command to the standard console output;
+          - cb / clipboard:   Write output of the command to the system clipboard;
           - <file path>:      Write output  of the command to the file with specified path.
                               File must not exist prior to command execution
            [default: clipboard]

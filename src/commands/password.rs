@@ -41,8 +41,8 @@ pub struct Args {
         short = 'o',
         long = "output",
         help = "The output location for the command result. Supported values:\n\
-        - c / console:      Print output of the command to the standard console output\n\
-        - cb / clipboard:   Write output of the command to the system clipboard\n\
+        - c / console:      Print output of the command to the standard console output;\n\
+        - cb / clipboard:   Write output of the command to the system clipboard;\n\
         - <file path>:      Write output  of the command to the file with specified path.\n\
         \t\t      File must not exist prior to command execution\n",
         value_parser = parse_output_option,
