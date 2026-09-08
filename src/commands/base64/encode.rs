@@ -34,7 +34,7 @@ pub struct Args {
         conflicts_with = "complementary_symbols",
         help = "Use custom alphabet. Must be a string consisting of exactly \n\
         64 unique symbols. If not provided - default alphabet is used: \n\
-        ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+        ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     )]
     alphabet: Option<String>,
 
@@ -43,7 +43,7 @@ pub struct Args {
         long = "complementary-symbols",
         conflicts_with = "alphabet",
         help = "Use symbols provided as a replacement for default complementary symbols \n\
-        (63th and 64th character in alphabet: +/).",
+        (63th and 64th character in alphabet: +/)."
     )]
     complementary_symbols: Option<String>,
 
@@ -78,6 +78,6 @@ pub fn run(args: Args) -> Result<(), String> {
         Err(e) => return Err(e),
         Ok(data) => data,
     };
-    
+
     write_output(args.output, encoded_data)
 }

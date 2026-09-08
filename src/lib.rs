@@ -12,4 +12,3 @@ pub fn run() -> Result<(), String> {
     let cli = cli::Cli::parse();
     commands::run(cli.command)
 }
- 

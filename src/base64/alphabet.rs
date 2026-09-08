@@ -1,8 +1,12 @@
-use std::{collections::{HashSet}};
+use std::collections::HashSet;
 
-pub const DEFAULT_ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+pub const DEFAULT_ALPHABET: &str =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-pub fn validate_alphabet(alphabet: Option<String>, complementary_symbols: Option<String>) -> Result<String, String> {
+pub fn validate_alphabet(
+    alphabet: Option<String>,
+    complementary_symbols: Option<String>,
+) -> Result<String, String> {
     // Return error if both alphabet and complementary symbols are provided
     if alphabet.is_some() && complementary_symbols.is_some() {
         return Err("cannot provide both alphabet and complementary symbols".to_string());
@@ -16,24 +20,21 @@ pub fn validate_alphabet(alphabet: Option<String>, complementary_symbols: Option
     let alphabet_candidate: Result<String, String> = if let Some(candidate) = alphabet {
         let alphabet_char_set: HashSet<char> = candidate.chars().collect();
         if alphabet_char_set.len() != 64 {
-            Err(
-                format!(
-                    "alphabet must contain exactly 64 unique symbols, but has {}.",
-                    alphabet_char_set.len()
-                )
-            )
+            Err(format!(
+                "alphabet must contain exactly 64 unique symbols, but has {}.",
+                alphabet_char_set.len()
+            ))
         } else {
             Ok(candidate)
         }
     } else if let Some(complementary_symbols_candidate) = complementary_symbols {
-        let complementary_symbols_char_set: HashSet<char> = complementary_symbols_candidate.chars().collect();
+        let complementary_symbols_char_set: HashSet<char> =
+            complementary_symbols_candidate.chars().collect();
         if complementary_symbols_char_set.len() != 2 {
-            Err(
-                format!(
-                    "complementary symbols must contain exactly 2 unique symbols, but has {}.",
-                    complementary_symbols_char_set.len()
-                )
-            )
+            Err(format!(
+                "complementary symbols must contain exactly 2 unique symbols, but has {}.",
+                complementary_symbols_char_set.len()
+            ))
         } else {
             // Replace the last two symbols of the default alphabet with the provided complementary symbols
             let candidate = DEFAULT_ALPHABET[..62].to_string() + &complementary_symbols_candidate;
@@ -51,7 +52,10 @@ pub fn validate_alphabet(alphabet: Option<String>, complementary_symbols: Option
                 .collect::<Vec<char>>();
 
             if non_printable_characters.len() > 0 {
-                return Err(format!("alphabet contains non-printable symbols: {:?}", non_printable_characters));
+                return Err(format!(
+                    "alphabet contains non-printable symbols: {:?}",
+                    non_printable_characters
+                ));
             }
 
             return Ok(alphabet);
@@ -62,11 +66,17 @@ pub fn validate_alphabet(alphabet: Option<String>, complementary_symbols: Option
 
 pub fn validate_padding_symbol(padding_symbol: char, alphabet: &String) -> Result<char, String> {
     if !is_printable_character(padding_symbol as u8) {
-        return Err(format!("padding symbol '{}' is a non-printable character", padding_symbol));
+        return Err(format!(
+            "padding symbol '{}' is a non-printable character",
+            padding_symbol
+        ));
     }
 
     if alphabet.contains(padding_symbol) {
-        return Err(format!("padding symbol '{}' is part of the alphabet", padding_symbol));
+        return Err(format!(
+            "padding symbol '{}' is part of the alphabet",
+            padding_symbol
+        ));
     }
 
     Ok(padding_symbol)

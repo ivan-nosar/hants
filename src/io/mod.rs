@@ -41,16 +41,16 @@ pub fn read_input(target: IoTarget) -> Result<String, String> {
         IoTarget::Console => {
             // TODO: Appends new-line symbol by end of the `buffer`. Debug through it and fix.
             let mut buffer = String::new();
-            io::stdin().read_to_string(&mut buffer).map_err(|e| e.to_string())?;
+            io::stdin()
+                .read_to_string(&mut buffer)
+                .map_err(|e| e.to_string())?;
             Ok(buffer)
         }
         IoTarget::Clipboard => {
             let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
             clipboard.get_text().map_err(|e| e.to_string())
         }
-        IoTarget::File(path) => {
-            fs::read_to_string(&path).map_err(|e| e.to_string())
-        }
+        IoTarget::File(path) => fs::read_to_string(&path).map_err(|e| e.to_string()),
     }
 }
 
@@ -96,7 +96,7 @@ fn try_parse_file_option(option_value: &str, direction: IoDirection) -> Result<I
                     } else {
                         Err(invalid_io_option_message(option_value, direction))
                     }
-                },
+                }
             }
         }
         IoDirection::Output => {

@@ -15,8 +15,8 @@ pub fn generate_password(length: usize, alphabet_chars: Vec<char>, seed: Option<
     // retrieves cryptographically secure entropy from the host OS core - it's not bound directly to
     // any externally-visible data (such as timestamps) and ensure cryptographic resistance.
     let mut rng = match seed {
-        Some(seed) => { StdRng::seed_from_u64(seed) }
-        None => { StdRng::try_from_rng(&mut SysRng).unwrap() }
+        Some(seed) => StdRng::seed_from_u64(seed),
+        None => StdRng::try_from_rng(&mut SysRng).unwrap(),
     };
 
     (0..length)
