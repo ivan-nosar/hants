@@ -51,16 +51,16 @@ pub fn validate_alphabet(
                 .filter(|&c| !is_printable_character(c as u8))
                 .collect::<Vec<char>>();
 
-            if non_printable_characters.len() > 0 {
+            if !non_printable_characters.is_empty() {
                 return Err(format!(
                     "alphabet contains non-printable symbols: {:?}",
                     non_printable_characters
                 ));
             }
 
-            return Ok(alphabet);
+            Ok(alphabet)
         }
-        Err(e) => return Err(e),
+        Err(e) => Err(e),
     }
 }
 
@@ -97,5 +97,5 @@ pub fn build_alphabet_mapping(alphabet: &String) -> [u8; 64] {
 
 fn is_printable_character(byte: u8) -> bool {
     // Check if the byte is a printable ASCII character (32-126)
-    byte >= 32_u8 && byte <= 126_u8
+    (32_u8..=126_u8).contains(&byte)
 }

@@ -57,27 +57,15 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<(), String> {
-    let alphabet = match validate_alphabet(args.alphabet, args.complementary_symbols) {
-        Err(e) => return Err(e),
-        Ok(alphabet) => alphabet,
-    };
+    let alphabet = validate_alphabet(args.alphabet, args.complementary_symbols)?;
 
-    let padding_symbol = match validate_padding_symbol(args.padding_symbol, &alphabet) {
-        Err(e) => return Err(e),
-        Ok(padding_symbol) => padding_symbol,
-    };
+    let padding_symbol = validate_padding_symbol(args.padding_symbol, &alphabet)?;
 
     let alphabet_mapping = build_alphabet_mapping(&alphabet);
 
-    let input_data = match read_input(args.input) {
-        Err(e) => return Err(e),
-        Ok(data) => data,
-    };
+    let input_data = read_input(args.input)?;
 
-    let encoded_data = match encode_with_alphabet(input_data, alphabet_mapping, padding_symbol) {
-        Err(e) => return Err(e),
-        Ok(data) => data,
-    };
+    let encoded_data = encode_with_alphabet(input_data, alphabet_mapping, padding_symbol)?;
 
     write_output(args.output, encoded_data)
 }

@@ -79,7 +79,7 @@ fn try_parse_file_option(option_value: &str, direction: IoDirection) -> Result<I
 
     match direction {
         IoDirection::Input => {
-            if let Err(_) = path_canonicalization_result {
+            if path_canonicalization_result.is_err() {
                 // Return error on any error kind:
                 // - io::ErrorKind::NotFound: when file is not found
                 // - io::ErrorKind::InvalidInput: the file or a component of the path does not exist
