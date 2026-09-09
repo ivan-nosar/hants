@@ -41,7 +41,7 @@ pub fn validate_alphabet(
             Ok(candidate)
         }
     } else {
-        Err("either alphabet or complementary symbols must be provided".to_string())
+        Ok(DEFAULT_ALPHABET.to_string())
     };
 
     match alphabet_candidate {

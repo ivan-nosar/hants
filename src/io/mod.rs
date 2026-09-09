@@ -36,7 +36,7 @@ pub fn write_output(target: IoTarget, content: String) -> Result<(), String> {
     Ok(())
 }
 
-pub fn read_input(target: IoTarget) -> Result<String, String> {
+pub fn read_input_bytes(target: IoTarget) -> Result<Vec<u8>, String> {
     match target {
         IoTarget::Console => {
             // TODO: Appends new-line symbol by end of the `buffer`. Debug through it and fix.
@@ -44,13 +44,16 @@ pub fn read_input(target: IoTarget) -> Result<String, String> {
             io::stdin()
                 .read_to_string(&mut buffer)
                 .map_err(|e| e.to_string())?;
-            Ok(buffer)
+            Ok(buffer.into_bytes())
         }
         IoTarget::Clipboard => {
             let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
-            clipboard.get_text().map_err(|e| e.to_string())
+            match clipboard.get_text() {
+                Ok(text) => Ok(text.into_bytes()),
+                Err(e) => Err(e.to_string()),
+            }
         }
-        IoTarget::File(path) => fs::read_to_string(&path).map_err(|e| e.to_string()),
+        IoTarget::File(path) => fs::read(&path).map_err(|e| e.to_string()),
     }
 }
 

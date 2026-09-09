@@ -1,6 +1,6 @@
 use crate::base64::alphabet::{build_alphabet_mapping, validate_alphabet, validate_padding_symbol};
 use crate::base64::engine::encode_with_alphabet;
-use crate::io::{IoTarget, parse_input_option, parse_output_option, read_input, write_output};
+use crate::io::{IoTarget, parse_input_option, parse_output_option, read_input_bytes, write_output};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -63,7 +63,7 @@ pub fn run(args: Args) -> Result<(), String> {
 
     let alphabet_mapping = build_alphabet_mapping(&alphabet);
 
-    let input_data = read_input(args.input)?;
+    let input_data = read_input_bytes(args.input)?;
 
     let encoded_data = encode_with_alphabet(input_data, alphabet_mapping, padding_symbol)?;
 
