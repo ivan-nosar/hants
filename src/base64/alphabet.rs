@@ -64,7 +64,7 @@ pub fn validate_alphabet(
     }
 }
 
-pub fn validate_padding_symbol(padding_symbol: char, alphabet: &String) -> Result<char, String> {
+pub fn validate_padding_symbol(padding_symbol: char, alphabet: &str) -> Result<char, String> {
     if !is_printable_character(padding_symbol as u8) {
         return Err(format!(
             "padding symbol '{}' is a non-printable character",
@@ -82,7 +82,7 @@ pub fn validate_padding_symbol(padding_symbol: char, alphabet: &String) -> Resul
     Ok(padding_symbol)
 }
 
-pub fn build_alphabet_mapping(alphabet: &String) -> [u8; 64] {
+pub fn build_alphabet_mapping(alphabet: &str) -> [u8; 64] {
     // TODO: Read comment below:
     // Building a mapping between 24-bits input and 4 characters of the alphabet output
     // will result in an excessive memory consumption, however, will potentially show faster performance.
