@@ -1,6 +1,8 @@
 use crate::base64::alphabet::{build_alphabet_mapping, validate_alphabet, validate_padding_symbol};
 use crate::base64::engine::encode_with_alphabet;
-use crate::io::{IoTarget, parse_input_option, parse_output_option, read_input_bytes, write_output};
+use crate::io::{
+    IoTarget, parse_input_option, parse_output_option, read_input_bytes, write_output,
+};
 
 #[derive(clap::Args)]
 pub struct Args {
