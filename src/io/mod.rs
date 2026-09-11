@@ -39,7 +39,6 @@ pub fn write_output(target: IoTarget, content: String) -> Result<(), String> {
 pub fn read_input_bytes(target: IoTarget) -> Result<Vec<u8>, String> {
     match target {
         IoTarget::Console => {
-            // TODO: Appends new-line symbol by end of the `buffer`. Debug through it and fix.
             let mut buffer = String::new();
             io::stdin()
                 .read_to_string(&mut buffer)
