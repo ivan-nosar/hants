@@ -7,32 +7,13 @@ pub fn encode_with_alphabet(
     alphabet_mapping: [u8; 64],
     padding_symbol: u8,
 ) -> Result<String, String> {
-    let tail_length = input_bytes.len() % ENCODE_CHUNK_SIZE;
-    let full_chunks_count = (input_bytes.len() - tail_length) / ENCODE_CHUNK_SIZE;
-
     let mut encoded_buffer: Vec<char> =
         Vec::with_capacity(calculate_output_length(input_bytes.len()));
 
     // Process "body" of input payload (sequence of full 3-bytes blocks)
-    let mut chunks_processed: usize = 0;
-    while chunks_processed < full_chunks_count {
-        let chunk_start_index = chunks_processed * ENCODE_CHUNK_SIZE;
+    let (chunks, tail) = input_bytes.as_chunks::<ENCODE_CHUNK_SIZE>();
 
-        // TODO: Rework with `.chunks()` method (AI: ignore that todo)
-        // Read 3-byte chunk from input and convert them into u32
-        let chunk: [u8; ENCODE_CHUNK_SIZE] = input_bytes
-            [chunk_start_index..chunk_start_index + ENCODE_CHUNK_SIZE]
-            .try_into()
-            .map_err(|_| {
-                // This code is unlikely to be reached because we already
-                // calculated the number of full chunks based on the input length.
-                format!(
-                    "failed to prepare input bytes {}..{} for conversion",
-                    chunk_start_index,
-                    chunk_start_index + ENCODE_CHUNK_SIZE
-                )
-            })?;
-
+    for chunk in chunks {
         // We use Big Endian arrangement to ensure chunk[0] is the most significant byte,
         // while chunk[2] is the least significant byte of the 3-byte chunk. That way, reading
         // first 6 bits from the left corresponds to the most significant bits of chunk[0].
@@ -47,26 +28,20 @@ pub fn encode_with_alphabet(
             .push(alphabet_mapping[((chunk_value >> 14) & SIX_BITS_MASK) as usize] as char);
         encoded_buffer
             .push(alphabet_mapping[((chunk_value >> 8) & SIX_BITS_MASK) as usize] as char);
-
-        chunks_processed += 1;
     }
 
     // Process tail of input payload (sequence of 1 or 2 remaining bytes)
-    let tail_start_index = input_bytes.len() - tail_length;
     let padding_char = padding_symbol as char;
-    if tail_length == 1 {
-        let tail_value = u16::from_be_bytes([input_bytes[tail_start_index], 0]);
+    if tail.len() == 1 {
+        let tail_value = u16::from_be_bytes([tail[0], 0]);
         encoded_buffer
             .push(alphabet_mapping[((tail_value >> 10) & (SIX_BITS_MASK as u16)) as usize] as char);
         encoded_buffer
             .push(alphabet_mapping[((tail_value >> 4) & (SIX_BITS_MASK as u16)) as usize] as char);
         encoded_buffer.push(padding_char);
         encoded_buffer.push(padding_char);
-    } else if tail_length == 2 {
-        let tail_value = u16::from_be_bytes([
-            input_bytes[tail_start_index],
-            input_bytes[tail_start_index + 1],
-        ]);
+    } else if tail.len() == 2 {
+        let tail_value = u16::from_be_bytes([tail[0], tail[1]]);
         encoded_buffer
             .push(alphabet_mapping[((tail_value >> 10) & (SIX_BITS_MASK as u16)) as usize] as char);
         encoded_buffer
