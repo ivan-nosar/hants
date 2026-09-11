@@ -24,7 +24,7 @@ pub fn encode_with_alphabet(
             [chunk_start_index..chunk_start_index + ENCODE_CHUNK_SIZE]
             .try_into()
             .map_err(|_| {
-                // This code is unlikely to be reached because we already 
+                // This code is unlikely to be reached because we already
                 // calculated the number of full chunks based on the input length.
                 format!(
                     "failed to prepare input bytes {}..{} for conversion",
@@ -320,7 +320,11 @@ mod tests {
             };
             let symbols: Vec<char> = encoded.chars().collect();
 
-            assert_eq!(symbols.len() % 4, 0, "length {length} must emit full quanta");
+            assert_eq!(
+                symbols.len() % 4,
+                0,
+                "length {length} must emit full quanta"
+            );
             assert_eq!(
                 symbols.iter().filter(|&&c| c == padding_char).count(),
                 expected_padding_count,

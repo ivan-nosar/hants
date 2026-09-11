@@ -333,8 +333,14 @@ mod tests {
 
     #[test]
     fn accepts_padding_symbol_at_printable_ascii_boundaries() {
-        assert_eq!(validate_padding_symbol(' ', DEFAULT_ALPHABET).unwrap(), b' ');
-        assert_eq!(validate_padding_symbol('~', DEFAULT_ALPHABET).unwrap(), b'~');
+        assert_eq!(
+            validate_padding_symbol(' ', DEFAULT_ALPHABET).unwrap(),
+            b' '
+        );
+        assert_eq!(
+            validate_padding_symbol('~', DEFAULT_ALPHABET).unwrap(),
+            b'~'
+        );
     }
 
     #[test]
@@ -437,7 +443,10 @@ mod tests {
         }
 
         for symbol in ['\u{1f4a9}', '\u{10ffff}'] {
-            assert!(!is_printable_character(symbol), "{symbol:?} must be rejected");
+            assert!(
+                !is_printable_character(symbol),
+                "{symbol:?} must be rejected"
+            );
         }
     }
 }
