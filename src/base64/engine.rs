@@ -31,6 +31,9 @@ pub fn encode_with_alphabet(
                     chunk_start_index + ENCODE_CHUNK_SIZE
                 )
             })?;
+        // We use Big Endian arrangement to ensure chunk[0] is the most significant byte,
+        // while chunk[2] is the least significant byte of the 3-byte chunk. That way, reading
+        // first 6 bits from the left corresponds to the most significant bits of chunk[0].
         let chunk_value = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], 0]);
 
         // Get all 4 6-bits segments from the `chunk_value` and encode them using the `alphabet_mapping`
