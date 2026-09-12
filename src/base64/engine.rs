@@ -69,6 +69,10 @@ pub fn calculate_output_length(input_length: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{calculate_output_length, encode_with_alphabet};
+    // Leading `::` disambiguates the external crate from this crate's own `base64` module.
+    use ::base64::Engine as _;
+    use ::base64::alphabet::{Alphabet, Symbol};
+    use ::base64::engine::general_purpose::{self, GeneralPurpose};
 
     const STANDARD_ALPHABET: &str =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -94,55 +98,30 @@ mod tests {
         encode_with_alphabet(input, mapping_of(alphabet), padding_symbol).unwrap()
     }
 
-    /// Independent RFC 4648 encoder used as a cross-check oracle.
-    fn reference_encode(input: &[u8], alphabet: &str, padding_symbol: u8) -> String {
-        let table: Vec<char> = alphabet.chars().collect();
-        let padding_char = padding_symbol as char;
-        let mut output = String::new();
+    fn reference_engine(alphabet: &str, padding: u8) -> GeneralPurpose {
+        let padding_symbol = Symbol::new(padding).unwrap();
+        let alphabet =
+            Alphabet::new_with_padding(alphabet, padding_symbol).expect("test alphabet must be a valid base64 alphabet");
+        GeneralPurpose::new(&alphabet, general_purpose::PAD)
+    }
 
-        for chunk in input.chunks(3) {
-            let first = chunk[0] as u32;
-            let second = chunk.get(1).copied().unwrap_or(0) as u32;
-            let third = chunk.get(2).copied().unwrap_or(0) as u32;
-            let group = (first << 16) | (second << 8) | third;
-
-            output.push(table[((group >> 18) & 0x3f) as usize]);
-            output.push(table[((group >> 12) & 0x3f) as usize]);
-            match chunk.len() {
-                1 => {
-                    output.push(padding_char);
-                    output.push(padding_char);
-                }
-                2 => {
-                    output.push(table[((group >> 6) & 0x3f) as usize]);
-                    output.push(padding_char);
-                }
-                _ => {
-                    output.push(table[((group >> 6) & 0x3f) as usize]);
-                    output.push(table[(group & 0x3f) as usize]);
-                }
-            }
-        }
-
-        output
+    /// RFC 4648 encoder from the `base64` crate, used as a cross-check oracle.
+    fn reference_encode(input: &[u8], alphabet: &str, padding: u8) -> String {
+        reference_engine(alphabet, padding).encode(input)
     }
 
     /// Packs 6-bit values back into octets; requires a multiple of 4 values.
     fn pack_six_bit_values(values: &[u8]) -> Vec<u8> {
         assert_eq!(values.len() % 4, 0);
 
-        let mut bytes = Vec::with_capacity(values.len() / 4 * 3);
-        for chunk in values.chunks(4) {
-            let group = ((chunk[0] as u32) << 18)
-                | ((chunk[1] as u32) << 12)
-                | ((chunk[2] as u32) << 6)
-                | (chunk[3] as u32);
-            bytes.push((group >> 16) as u8);
-            bytes.push((group >> 8) as u8);
-            bytes.push(group as u8);
-        }
+        let symbols: String = values
+            .iter()
+            .map(|&value| STANDARD_ALPHABET.as_bytes()[value as usize] as char)
+            .collect();
 
-        bytes
+        reference_engine(STANDARD_ALPHABET, b'=')
+            .decode(symbols)
+            .expect("six-bit values must form a canonical base64 payload")
     }
 
     struct XorShift64(u64);
