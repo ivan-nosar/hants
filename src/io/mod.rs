@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use arboard::Clipboard;
+use std::borrow::Cow;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -46,34 +46,32 @@ pub fn write_output_bytes(target: IoTarget, content: &[u8]) -> Result<(), String
     // of valid printable symbols only; `Cow::Owned` will be present otherwise.
 
     match target {
-        IoTarget::Console => {
-            match String::from_utf8_lossy(&content) {
-                Cow::Owned(result) => println!(
-                    "Note: binary data detected; the visible representation may not reflect the actual content.\n{}",
-                    result
-                ),
-                Cow::Borrowed(result) => println!("{}", result)
-            }
+        IoTarget::Console => match String::from_utf8_lossy(content) {
+            Cow::Owned(result) => println!(
+                "Note: binary data detected; the visible representation may not reflect the actual content.\n{}",
+                result
+            ),
+            Cow::Borrowed(result) => println!("{}", result),
         },
         IoTarget::Clipboard => {
             let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
 
-            match String::from_utf8_lossy(&content) {
+            match String::from_utf8_lossy(content) {
                 Cow::Owned(result) => {
                     println!(
                         "Note: binary data detected; the visible representation may not reflect the actual content."
                     );
 
                     clipboard.set_text(result).map_err(|e| e.to_string())?;
-                },
-                Cow::Borrowed(result) => clipboard.set_text(result).map_err(|e| e.to_string())?
+                }
+                Cow::Borrowed(result) => clipboard.set_text(result).map_err(|e| e.to_string())?,
             }
         }
         IoTarget::File(path) => {
             if path.exists() {
                 return Err(format!("file already exists: {}", path.display()));
             }
-            fs::write(&path, &content).map_err(|e| e.to_string())?;
+            fs::write(&path, content).map_err(|e| e.to_string())?;
         }
     }
 

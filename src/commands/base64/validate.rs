@@ -1,4 +1,6 @@
-use crate::base64::alphabet::{build_encoding_alphabet_mapping, validate_alphabet, validate_padding_symbol};
+use crate::base64::alphabet::{
+    build_encoding_alphabet_mapping, validate_alphabet, validate_padding_symbol,
+};
 use crate::base64::engine::encode_with_alphabet;
 use crate::commands::base64::Args;
 use crate::io::{read_input_bytes, write_output_string};

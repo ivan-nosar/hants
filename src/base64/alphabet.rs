@@ -60,12 +60,13 @@ pub fn validate_alphabet(
             let non_printable_characters = alphabet
                 .chars()
                 .filter(|&c| !is_printable_character(c))
-                .collect::<Vec<char>>();
+                .map(|c| format!("U+{:04X}", c as u32))
+                .collect::<Vec<String>>();
 
             if !non_printable_characters.is_empty() {
                 return Err(format!(
-                    "alphabet contains non-printable symbols: {:?}",
-                    non_printable_characters
+                    "alphabet contains non-printable symbols: {}",
+                    non_printable_characters.join(", ")
                 ));
             }
 
@@ -129,8 +130,8 @@ fn is_printable_character(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ALPHABET, build_encoding_alphabet_mapping, is_printable_character, validate_alphabet,
-        validate_padding_symbol,
+        DEFAULT_ALPHABET, build_decoding_alphabet_mapping, build_encoding_alphabet_mapping,
+        is_printable_character, validate_alphabet, validate_padding_symbol,
     };
     use std::collections::HashSet;
 
@@ -230,6 +231,7 @@ mod tests {
         let error = validate_alphabet(Some(candidate), None).unwrap_err();
 
         assert!(error.contains("non-printable"), "{error}");
+        assert!(error.contains("U+0141"), "{error}");
     }
 
     #[test]
@@ -239,7 +241,26 @@ mod tests {
             let error = validate_alphabet(Some(candidate), None).unwrap_err();
 
             assert!(error.contains("non-printable"), "for {symbol:?}: {error}");
+            // The offending symbols cannot be printed, so they must be reported by code point.
+            assert!(
+                error.contains(&format!("U+{:04X}", symbol as u32)),
+                "for {symbol:?}: {error}"
+            );
+            assert!(
+                !error.contains(symbol),
+                "for {symbol:?}: the raw symbol must not be emitted: {error}"
+            );
         }
+    }
+
+    #[test]
+    fn reports_every_non_printable_symbol_of_a_custom_alphabet() {
+        let candidate = format!("\u{0}{}\u{7f}", &DEFAULT_ALPHABET[..62]);
+
+        let error = validate_alphabet(Some(candidate), None).unwrap_err();
+
+        assert!(error.contains("U+0000"), "{error}");
+        assert!(error.contains("U+007F"), "{error}");
     }
 
     #[test]
@@ -420,6 +441,74 @@ mod tests {
         assert_eq!(
             build_encoding_alphabet_mapping(&oversized),
             build_encoding_alphabet_mapping(DEFAULT_ALPHABET)
+        );
+    }
+
+    #[test]
+    fn builds_symbol_to_index_mapping() {
+        for alphabet in [DEFAULT_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            let mapping = build_decoding_alphabet_mapping(alphabet);
+
+            assert_eq!(mapping.len(), 64, "mapping for {alphabet}");
+            for (index, symbol) in alphabet.bytes().enumerate() {
+                assert_eq!(
+                    mapping.get(&symbol),
+                    Some(&(index as u8)),
+                    "symbol {:?} of {alphabet}",
+                    symbol as char
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_mapping_inverts_the_encoding_mapping() {
+        for alphabet in [DEFAULT_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            let encoding_mapping = build_encoding_alphabet_mapping(alphabet);
+            let decoding_mapping = build_decoding_alphabet_mapping(alphabet);
+
+            for index in 0..64_u8 {
+                let symbol = encoding_mapping[index as usize];
+
+                assert_eq!(
+                    decoding_mapping[&symbol], index,
+                    "round trip of index {index} in {alphabet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_mapping_excludes_symbols_outside_the_alphabet() {
+        let mapping = build_decoding_alphabet_mapping(DEFAULT_ALPHABET);
+
+        for symbol in [b'=', b'-', b'_', b' ', b'~', b'\n', 0x00, 0xff] {
+            assert!(
+                !mapping.contains_key(&symbol),
+                "{:?} must not be decodable",
+                symbol as char
+            );
+        }
+    }
+
+    #[test]
+    fn decoding_mapping_maps_validated_complementary_symbols_to_the_last_two_indices() {
+        let alphabet = validate_alphabet(None, Some("-_".to_string())).unwrap();
+        let mapping = build_decoding_alphabet_mapping(&alphabet);
+
+        assert_eq!(mapping[&b'-'], 62);
+        assert_eq!(mapping[&b'_'], 63);
+        assert!(!mapping.contains_key(&b'+'));
+        assert!(!mapping.contains_key(&b'/'));
+    }
+
+    #[test]
+    fn decoding_mapping_ignores_alphabet_symbols_beyond_the_first_64() {
+        let oversized = format!("{DEFAULT_ALPHABET}~!@");
+
+        assert_eq!(
+            build_decoding_alphabet_mapping(&oversized),
+            build_decoding_alphabet_mapping(DEFAULT_ALPHABET)
         );
     }
 

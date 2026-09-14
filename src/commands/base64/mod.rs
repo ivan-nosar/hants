@@ -1,10 +1,10 @@
-use clap::Subcommand;
 use crate::io::{IoTarget, parse_input_option, parse_output_option};
+use clap::Subcommand;
 
-pub mod encode;
 pub mod decode;
-pub mod validate;
+pub mod encode;
 pub mod length;
+pub mod validate;
 
 #[derive(clap::Args)]
 pub struct Args {
