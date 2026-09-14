@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_ALPHABET: &str =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -93,15 +93,30 @@ pub fn validate_padding_symbol(padding_symbol: char, alphabet: &str) -> Result<u
     Ok(padding_symbol as u8)
 }
 
-pub fn build_alphabet_mapping(alphabet: &str) -> [u8; 64] {
+pub fn build_encoding_alphabet_mapping(alphabet: &str) -> [u8; 64] {
     // TODO: Read comment below:
     // Building a mapping between 24-bits input and 4 characters of the alphabet output
     // will result in an excessive memory consumption, however, will potentially show faster performance.
     // Now the simple 6-bit input to 1 character output mapping is used. Performance will be optimized
     // with SIMD instructions in the future, but for now, this is a simple and straightforward approach.
+
+    // TODO: Read comment below:
+    // This is complementary function for the `build_decoding_alphabet_mapping`.
+    // They must be updated together.
     let mut mapping = [0_u8; 64];
     for (i, c) in alphabet.chars().enumerate().take(64) {
         mapping[i] = c as u8;
+    }
+    mapping
+}
+
+pub fn build_decoding_alphabet_mapping(alphabet: &str) -> HashMap<u8, u8> {
+    // TODO: Read comment below:
+    // This is complementary function for the `build_encoding_alphabet_mapping`.
+    // They must be updated together.
+    let mut mapping = HashMap::new();
+    for (i, c) in alphabet.chars().enumerate().take(64) {
+        mapping.insert(c as u8, i as u8);
     }
     mapping
 }
@@ -114,7 +129,7 @@ fn is_printable_character(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ALPHABET, build_alphabet_mapping, is_printable_character, validate_alphabet,
+        DEFAULT_ALPHABET, build_encoding_alphabet_mapping, is_printable_character, validate_alphabet,
         validate_padding_symbol,
     };
     use std::collections::HashSet;
@@ -383,7 +398,7 @@ mod tests {
     #[test]
     fn builds_index_to_symbol_mapping() {
         for alphabet in [DEFAULT_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
-            let mapping = build_alphabet_mapping(alphabet);
+            let mapping = build_encoding_alphabet_mapping(alphabet);
 
             assert_eq!(mapping, *alphabet.as_bytes(), "mapping for {alphabet}");
         }
@@ -392,7 +407,7 @@ mod tests {
     #[test]
     fn maps_validated_complementary_symbols_to_the_last_two_indices() {
         let alphabet = validate_alphabet(None, Some("-_".to_string())).unwrap();
-        let mapping = build_alphabet_mapping(&alphabet);
+        let mapping = build_encoding_alphabet_mapping(&alphabet);
 
         assert_eq!(mapping[62], b'-');
         assert_eq!(mapping[63], b'_');
@@ -403,8 +418,8 @@ mod tests {
         let oversized = format!("{DEFAULT_ALPHABET}~!@");
 
         assert_eq!(
-            build_alphabet_mapping(&oversized),
-            build_alphabet_mapping(DEFAULT_ALPHABET)
+            build_encoding_alphabet_mapping(&oversized),
+            build_encoding_alphabet_mapping(DEFAULT_ALPHABET)
         );
     }
 

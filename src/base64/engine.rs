@@ -1,16 +1,20 @@
+use std::collections::{HashMap, HashSet};
+
 const ENCODE_CHUNK_SIZE: usize = 3;
 const DECODE_CHUNK_SIZE: usize = 4;
 const SIX_BITS_MASK: u32 = 0x3f;
+const BITS_PER_SYMBOL: u8 = 6;
+const WORD_SIZE_IN_BITS: u8 = 32;
 
 pub fn encode_with_alphabet(
     input_bytes: &[u8],
     alphabet_mapping: [u8; 64],
     padding_symbol: u8,
-) -> Result<String, String> {
+) -> String {
     let mut encoded_buffer: Vec<char> =
-        Vec::with_capacity(calculate_output_length(input_bytes.len()));
+        Vec::with_capacity(calculate_encoded_length(input_bytes.len()));
 
-    // Process "body" of input payload (sequence of full 3-bytes blocks)
+    // Process "body" of input payload (sequence of full 3-bytes chunks)
     let (chunks, tail) = input_bytes.as_chunks::<ENCODE_CHUNK_SIZE>();
 
     for chunk in chunks {
@@ -51,24 +55,135 @@ pub fn encode_with_alphabet(
         encoded_buffer.push(padding_char);
     }
 
-    Ok(encoded_buffer.into_iter().collect())
+    encoded_buffer.into_iter().collect()
 }
 
-pub fn calculate_output_length(input_length: usize) -> usize {
-    let full_chunks_count = input_length / ENCODE_CHUNK_SIZE;
-    let tail_length = input_length % ENCODE_CHUNK_SIZE;
+pub fn decode_with_alphabet(
+    input_bytes: &[u8],
+    alphabet_mapping: HashMap<u8, u8>,
+    padding_symbol: u8,
+) -> Result<Vec<u8>, String> {
+    // TODO: Low performance. Optimize
+    // Trim from start and end: leading and trailing whitespaces are acceptable
+    let trimmed_input_bytes = input_bytes.trim_ascii();
 
-    let mut output_length = full_chunks_count * DECODE_CHUNK_SIZE;
-    if tail_length > 0 {
-        output_length += DECODE_CHUNK_SIZE;
+    let mut decoded_buffer: Vec<u8> =
+        Vec::with_capacity(calculate_decoded_length(input_bytes.len()));
+
+    // Current implementation demands paddings to be set correctly, so no "tail" expected.
+    let (chunks, tail) = trimmed_input_bytes.as_chunks::<DECODE_CHUNK_SIZE>();
+
+    if tail.len() > 0 {
+        return Err(
+            format!(
+                "input payload is malformed: unexpected tail bytes detected in the end: '{}'",
+                String::from_utf8_lossy(tail)
+            )
+        )
     }
 
-    output_length
+    let valid_base64_symbols = alphabet_mapping.keys().copied().collect::<HashSet<u8>>();
+
+    // Process "body" of input payload (sequence chunks without padding symbols)
+    for (index, chunk) in chunks[..chunks.len() - 1].iter().enumerate() {
+        if let Some(invalid_char_index) = chunk.iter().position(|c| !valid_base64_symbols.contains(c)) {
+            let char_position_in_payload = index * DECODE_CHUNK_SIZE + invalid_char_index + 1;
+
+            return Err(
+                format!(
+                    "invalid symbol detected in input payload: '{}' (position: {})",
+                    chunk[invalid_char_index] as char,
+                    char_position_in_payload
+                )
+            )
+        }
+
+        let bit_group_1 = alphabet_mapping[&chunk[0]] as u32 & SIX_BITS_MASK;
+        let bit_group_2 = alphabet_mapping[&chunk[1]] as u32 & SIX_BITS_MASK;
+        let bit_group_3 = alphabet_mapping[&chunk[2]] as u32 & SIX_BITS_MASK;
+        let bit_group_4 = alphabet_mapping[&chunk[3]] as u32 & SIX_BITS_MASK;
+
+        let decoded_chunk_value = bit_group_1 << 26 | bit_group_2 << 20 | bit_group_3 << 14 | bit_group_4 << 8;
+
+        pack_decoded_value(decoded_chunk_value, None, &mut decoded_buffer);
+    }
+
+    // Process last chunk (also known as tail). It can contain 0, 1, or 2 padding chars.
+    // Calculate number of trailing padding symbols and adjust output buffer size based on that.
+    let tail = chunks[chunks.len() - 1];
+    let mut i = tail.len();
+    while i > 0 {
+        if tail[i - 1] != padding_symbol {
+            break;
+        }
+        i -= 1;
+    }
+    let padding_symbols_count = DECODE_CHUNK_SIZE - (i);
+
+    if padding_symbols_count > 2 {
+        return Err("more than 2 padding symbols detected".to_string());
+    }
+
+    let tail_without_padding = &tail[..DECODE_CHUNK_SIZE - padding_symbols_count];
+    let mut decoded_tail_value = 0_u32;
+    for (index, symbol) in tail_without_padding.iter().enumerate() {
+        if !valid_base64_symbols.contains(symbol) {
+            let char_position_in_payload = (chunks.len() - 1) * DECODE_CHUNK_SIZE + index + 1;
+
+            return Err(
+                format!(
+                    "invalid symbol detected in input payload: '{}' (position: {})",
+                    *symbol as char,
+                    char_position_in_payload
+                )
+            )
+        }
+
+        let bitwise_shift = WORD_SIZE_IN_BITS - (index as u8 + 1) * BITS_PER_SYMBOL;
+        decoded_tail_value |= (alphabet_mapping[&symbol] as u32 & SIX_BITS_MASK) << bitwise_shift;
+    }
+
+    pack_decoded_value(decoded_tail_value, Some(ENCODE_CHUNK_SIZE - padding_symbols_count), &mut decoded_buffer);
+
+    Ok(decoded_buffer)
+}
+
+pub fn calculate_encoded_length(decoded_length: usize) -> usize {
+    let full_chunks_count = decoded_length / ENCODE_CHUNK_SIZE;
+    let tail_length = decoded_length % ENCODE_CHUNK_SIZE;
+
+    let mut encoded_length = full_chunks_count * DECODE_CHUNK_SIZE;
+    if tail_length > 0 {
+        encoded_length += DECODE_CHUNK_SIZE;
+    }
+
+    encoded_length
+}
+
+pub fn calculate_decoded_length(encoded_length: usize) -> usize {
+    // This function gives a best-effort assumption: precise value
+    // may be 1 or 2 bytes less because to padding symbols.
+    (encoded_length / DECODE_CHUNK_SIZE) * ENCODE_CHUNK_SIZE
+}
+
+fn pack_decoded_value(decoded_value: u32, meaningful_bytes_count: Option<usize>, decoded_buffer: &mut Vec<u8>) {
+    // We use Big Endian arrangement to ensure chunk[0] is the most significant byte,
+    // while chunk[2] is the least significant byte of the 3-byte chunk. That way, reading
+    // first 6 bits from the left corresponds to the most significant bits of chunk[0].
+    let decoded_tail_bytes = u32::to_be_bytes(decoded_value);
+
+    // TODO: Suboptimal. Unfold loop.
+    // Usually only 3 leading bytes are required: last byte is empty. The only exception is tail:
+    // based on number of padding symbols there might be 1, 2, or 3 meaningful bytes.
+    let bytes_to_put_count = meaningful_bytes_count.unwrap_or(ENCODE_CHUNK_SIZE);
+    for i in 0..bytes_to_put_count {
+        decoded_buffer.push(decoded_tail_bytes[i]);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_output_length, encode_with_alphabet};
+    use super::{calculate_encoded_length, encode_with_alphabet};
     // Leading `::` disambiguates the external crate from this crate's own `base64` module.
     use ::base64::Engine as _;
     use ::base64::alphabet::{Alphabet, Symbol};
@@ -95,7 +210,7 @@ mod tests {
     }
 
     fn encode(input: &[u8], alphabet: &str, padding_symbol: u8) -> String {
-        encode_with_alphabet(input, mapping_of(alphabet), padding_symbol).unwrap()
+        encode_with_alphabet(input, mapping_of(alphabet), padding_symbol)
     }
 
     fn reference_engine(alphabet: &str, padding: u8) -> GeneralPurpose {
@@ -389,7 +504,7 @@ mod tests {
 
             assert_eq!(
                 encoded.chars().count(),
-                calculate_output_length(length),
+                calculate_encoded_length(length),
                 "length {length}"
             );
         }
@@ -413,7 +528,7 @@ mod tests {
 
         for (input_length, expected) in expectations {
             assert_eq!(
-                calculate_output_length(input_length),
+                calculate_encoded_length(input_length),
                 expected,
                 "for input length {input_length}"
             );
@@ -424,7 +539,7 @@ mod tests {
     fn calculates_output_length_as_padded_quanta_count() {
         for input_length in 0..=1_000_usize {
             assert_eq!(
-                calculate_output_length(input_length),
+                calculate_encoded_length(input_length),
                 input_length.div_ceil(3) * 4,
                 "for input length {input_length}"
             );

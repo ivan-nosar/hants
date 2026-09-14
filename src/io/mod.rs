@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use arboard::Clipboard;
 use std::fs;
 use std::io::{self, Read};
@@ -18,12 +19,55 @@ pub fn parse_input_option(s: &str) -> Result<IoTarget, String> {
     parse_io_option(s, IoDirection::Input)
 }
 
-pub fn write_output(target: IoTarget, content: String) -> Result<(), String> {
+pub fn write_output_string(target: IoTarget, content: String) -> Result<(), String> {
     match target {
         IoTarget::Console => println!("{}", content),
         IoTarget::Clipboard => {
             let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
             clipboard.set_text(content).map_err(|e| e.to_string())?;
+        }
+        IoTarget::File(path) => {
+            if path.exists() {
+                return Err(format!("file already exists: {}", path.display()));
+            }
+            fs::write(&path, &content).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn write_output_bytes(target: IoTarget, content: &[u8]) -> Result<(), String> {
+    // Console and Clipboard target demands content to be converted to string, which is typically not trivial
+    // thing to do. Luckily, Rust has a built-in `String::from_utf8_lossy` function allowing to convert any
+    // bytes sequence into printable UTF-8 chars. Any non-printable symbol will be converted to special glyph
+    // (e.g. �). Handy side effect of this function that can be used to determine whether any non-printable
+    // symbol was detected: return value will be wrapped with `Cow::Borrowed` option if input string consisted
+    // of valid printable symbols only; `Cow::Owned` will be present otherwise.
+
+    match target {
+        IoTarget::Console => {
+            match String::from_utf8_lossy(&content) {
+                Cow::Owned(result) => println!(
+                    "Note: binary data detected; the visible representation may not reflect the actual content.\n{}",
+                    result
+                ),
+                Cow::Borrowed(result) => println!("{}", result)
+            }
+        },
+        IoTarget::Clipboard => {
+            let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
+
+            match String::from_utf8_lossy(&content) {
+                Cow::Owned(result) => {
+                    println!(
+                        "Note: binary data detected; the visible representation may not reflect the actual content."
+                    );
+
+                    clipboard.set_text(result).map_err(|e| e.to_string())?;
+                },
+                Cow::Borrowed(result) => clipboard.set_text(result).map_err(|e| e.to_string())?
+            }
         }
         IoTarget::File(path) => {
             if path.exists() {
@@ -53,6 +97,26 @@ pub fn read_input_bytes(target: IoTarget) -> Result<Vec<u8>, String> {
             }
         }
         IoTarget::File(path) => fs::read(&path).map_err(|e| e.to_string()),
+    }
+}
+
+pub fn read_input_string(target: IoTarget) -> Result<String, String> {
+    match target {
+        IoTarget::Console => {
+            let mut buffer = String::new();
+            io::stdin()
+                .read_to_string(&mut buffer)
+                .map_err(|e| e.to_string())?;
+            Ok(buffer)
+        }
+        IoTarget::Clipboard => {
+            let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
+            match clipboard.get_text() {
+                Ok(text) => Ok(text),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        IoTarget::File(path) => fs::read_to_string(&path).map_err(|e| e.to_string()),
     }
 }
 

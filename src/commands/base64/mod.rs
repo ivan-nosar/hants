@@ -1,32 +1,87 @@
 use clap::Subcommand;
+use crate::io::{IoTarget, parse_input_option, parse_output_option};
 
 pub mod encode;
+pub mod decode;
+pub mod validate;
+pub mod length;
+
+#[derive(clap::Args)]
+pub struct Args {
+    #[arg(
+        short = 'o',
+        long = "output",
+        help = "The output location for the command result. Supported values:\n\
+        - c / console:      Print output of the command to the standard console output;\n\
+        - cb / clipboard:   Write output of the command to the system clipboard;\n\
+        - <file path>:      Write output of the command to the file with specified path.\n\
+        \t\t      File must not exist prior to command execution\n",
+        value_parser = parse_output_option,
+        default_value = "clipboard")]
+    output: IoTarget,
+
+    #[arg(
+        short = 'i',
+        long = "input",
+        help = "The target location for command to consume input from. Supported values:\n\
+        - c / console:      Read input for the command from the stdin. Most suitable for using with pipes;\n\
+        - cb / clipboard:   Read input for the command from the system clipboard;\n\
+        - <file path>:      Read input for the command from the file with specified path.\n\
+        \t\t      File must exist prior to command execution\n",
+        value_parser = parse_input_option,
+        default_value = "clipboard")]
+    input: IoTarget,
+
+    #[arg(
+        short = 'a',
+        long = "alphabet",
+        conflicts_with = "complementary_symbols",
+        help = "Use custom alphabet. Must be a string consisting of exactly \n\
+        64 unique symbols. If not provided - default alphabet is used: \n\
+        ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    )]
+    alphabet: Option<String>,
+
+    #[arg(
+        short = 'c',
+        long = "complementary-symbols",
+        conflicts_with = "alphabet",
+        help = "Use symbols provided as a replacement for default complementary symbols \n\
+        (63th and 64th character in alphabet: +/)."
+    )]
+    complementary_symbols: Option<String>,
+
+    #[arg(
+        short = 'p',
+        long = "padding-symbol",
+        help = "Use symbol provided as padding character.",
+        default_value = "="
+    )]
+    padding_symbol: char,
+}
 
 #[derive(Subcommand)]
 pub enum Command {
     #[command(about = "Encode input sequence to Base64 format")]
-    Encode(encode::Args),
+    Encode(Args),
 
     #[command(about = "Decode input Base64 sequence")]
-    Decode,
+    Decode(Args),
 
-    #[command(about = "Check if input string is a valid Base64 sequence")]
-    Validate,
+    #[command(about = "Check if input sequence is a valid Base64 payload")]
+    Validate(Args),
 
     #[command(
-        about = "Calculate the length of the Base64 encoded string for a given input. No encoding is performed."
+        about = "Calculate the length of the Base64 encoded sequence for a given input. No encoding is performed."
     )]
-    Length,
+    Length(length::Args),
 }
 
 pub fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Encode(args) => encode::run(args),
-        _ => {
-            println!("Not implemented yet");
-            Ok(())
-        } // Command::Decode(args) => base64::run(args),
-          // Command::Validate(args) => base64::run(args)
-          // Command::Length(args) => base64::run(args)
+        Command::Decode(args) => decode::run(args),
+        Command::Validate(args) => validate::run(args),
+        Command::Length(args) => length::run(args),
     }
 }

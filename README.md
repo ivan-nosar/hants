@@ -87,8 +87,8 @@ Usage: hants base64 <COMMAND>
 Commands:
   encode    Encode input sequence to Base64 format
   decode    Decode input Base64 sequence
-  validate  Check if input string is a valid Base64 sequence
-  length    Calculate the length of the Base64 encoded string for a given input. No encoding is performed.
+  validate  Check if input sequence is a valid Base64 payload
+  length    Calculate the length of the Base64 encoded sequence for a given input. No encoding is performed.
   help      Print this message or the help of the given subcommand(s)
 
 Options:

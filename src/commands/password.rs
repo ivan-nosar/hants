@@ -1,4 +1,4 @@
-use crate::io::{IoTarget, parse_output_option, write_output};
+use crate::io::{IoTarget, parse_output_option, write_output_string};
 use crate::password::alphabet::get_sorted_alphabet_chars;
 use crate::password::generator::generate_password;
 
@@ -63,7 +63,7 @@ pub fn run(args: Args) -> Result<(), String> {
 
     let password = generate_password(args.length, chars, args.seed);
 
-    write_output(args.output, password)
+    write_output_string(args.output, password)
 }
 
 #[cfg(test)]
