@@ -72,7 +72,8 @@ pub enum Command {
     Validate(Args),
 
     #[command(
-        about = "Calculate the length of the Base64 encoded sequence for a given input. No encoding is performed."
+        about = "Calculate the length of the encoded or decoded sequence for a given input. \
+        This operation doesn't perform any encoding or validation of the input sequence."
     )]
     Length(length::Args),
 }
