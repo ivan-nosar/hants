@@ -38,7 +38,7 @@ pub fn validate_alphabet(
 
     match alphabet_candidate {
         Ok(alphabet) => {
-            // A 64-byte long alphabet cannot hold multi-byte Unicode symbols.
+            // A 64-byte long alphabet cannot hold multibyte Unicode symbols.
             let alphabet_bytes = alphabet.as_bytes();
             if alphabet_bytes.len() != 64 {
                 return Err(format!(

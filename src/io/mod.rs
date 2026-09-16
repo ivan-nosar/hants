@@ -165,7 +165,7 @@ fn try_parse_file_option(option_value: &str, direction: IoDirection) -> Result<I
         }
         IoDirection::Output => {
             if let Err(e) = path_canonicalization_result {
-                if e.kind() == std::io::ErrorKind::NotFound {
+                if e.kind() == io::ErrorKind::NotFound {
                     // TODO: Consider creating parent directories recursively
                     // Ensure parent directory for the new file exists. Return error if not.
                     if let Some(parent) = path.parent()
