@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 const ENCODE_CHUNK_SIZE: usize = 3;
 const DECODE_CHUNK_SIZE: usize = 4;
@@ -1285,10 +1285,22 @@ mod tests {
         // A space-padded payload is no longer trimmable from the start.
         assert_eq!(trim_whitespaces(b" Zg  ", b' '), (b" Zg  ".as_slice(), 0));
         // First occurrence of the padding symbol will stop trimming.
-        assert_eq!(trim_whitespaces(b"\t\n  Zg  ", b' '), (b"  Zg  ".as_slice(), 2));
-        assert_eq!(trim_whitespaces(b" \t\n  Zg  ", b' '), (b" \t\n  Zg  ".as_slice(), 0));
-        assert_eq!(trim_whitespaces(b" Zg  \n\t", b' '), (b" Zg  ".as_slice(), 0));
-        assert_eq!(trim_whitespaces(b" Zg  \n\t ", b' '), (b" Zg  \n\t ".as_slice(), 0));
+        assert_eq!(
+            trim_whitespaces(b"\t\n  Zg  ", b' '),
+            (b"  Zg  ".as_slice(), 2)
+        );
+        assert_eq!(
+            trim_whitespaces(b" \t\n  Zg  ", b' '),
+            (b" \t\n  Zg  ".as_slice(), 0)
+        );
+        assert_eq!(
+            trim_whitespaces(b" Zg  \n\t", b' '),
+            (b" Zg  ".as_slice(), 0)
+        );
+        assert_eq!(
+            trim_whitespaces(b" Zg  \n\t ", b' '),
+            (b" Zg  \n\t ".as_slice(), 0)
+        );
     }
 
     #[test]
