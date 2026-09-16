@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
 const ENCODE_CHUNK_SIZE: usize = 3;
 const DECODE_CHUNK_SIZE: usize = 4;
@@ -163,89 +163,8 @@ pub fn decode_with_alphabet(
     Ok(decoded_buffer)
 }
 
-// TODO: Mostly duplicates code from `decode_with_alphabet`. Think of re-usage.
-pub fn validate_with_alphabet(
-    input_bytes: &[u8],
-    alphabet: String,
-    padding_symbol: u8,
-) -> String {
-    const VALID_MESSAGE: &str = "Valid";
-
-    // Trim from start and end: leading and trailing whitespaces are acceptable
-    let (trimmed_input_bytes, trimmed_from_start) = trim_whitespaces(input_bytes, padding_symbol);
-
-    if trimmed_input_bytes.is_empty() {
-        return VALID_MESSAGE.to_string();
-    }
-
-    // Current implementation demands paddings to be set correctly, so no "tail" expected.
-    let (chunks, tail) = trimmed_input_bytes.as_chunks::<DECODE_CHUNK_SIZE>();
-
-    if !tail.is_empty() {
-        return format!(
-            "Invalid; Input payload is malformed: unexpected tail bytes detected in the end: '{}'",
-            String::from_utf8_lossy(tail)
-        );
-    }
-
-    let alphabet_symbols_set: HashSet<u8> = alphabet.as_bytes().iter().copied().collect();
-
-    // Process "body" of input payload (sequence chunks without padding symbols)
-    for (index, chunk) in chunks[..chunks.len() - 1].iter().enumerate() {
-        if let Some(invalid_char_index) =
-            chunk.iter().position(|c| !alphabet_symbols_set.contains(c))
-        {
-            let char_position_in_payload =
-                trimmed_from_start + index * DECODE_CHUNK_SIZE + invalid_char_index + 1;
-
-            return format!(
-                "Invalid; Invalid symbol detected in input payload: '{}' (position: {})",
-                chunk[invalid_char_index] as char, char_position_in_payload
-            );
-        }
-    }
-
-    // Process last chunk (also known as tail). It can contain 0, 1, or 2 padding chars.
-    // Calculate number of trailing padding symbols and adjust output buffer size based on that.
-    let tail = chunks[chunks.len() - 1];
-    let padding_symbols_count = tail
-        .iter()
-        .rev()
-        .take_while(|&&symbol| symbol == padding_symbol)
-        .count();
-
-    if padding_symbols_count > 2 {
-        return "Invalid; More than 2 padding symbols detected".to_string();
-    }
-
-    let tail_without_padding = &tail[..DECODE_CHUNK_SIZE - padding_symbols_count];
-    for (index, symbol) in tail_without_padding.iter().enumerate() {
-        if !alphabet_symbols_set.contains(symbol) {
-            let char_position_in_payload =
-                trimmed_from_start + (chunks.len() - 1) * DECODE_CHUNK_SIZE + index + 1;
-
-            return format!(
-                "Invalid; Invalid symbol detected in input payload: '{}' (position: {})",
-                *symbol as char, char_position_in_payload
-            );
-        }
-    }
-
-    // TODO: Validate meaningless bits as well (will require real encoding of tail bytes)
-
-    VALID_MESSAGE.to_string()
-}
-
 pub fn calculate_encoded_length(decoded_length: usize) -> usize {
-    let full_chunks_count = decoded_length / ENCODE_CHUNK_SIZE;
-    let tail_length = decoded_length % ENCODE_CHUNK_SIZE;
-
-    let mut encoded_length = full_chunks_count * DECODE_CHUNK_SIZE;
-    if tail_length > 0 {
-        encoded_length += DECODE_CHUNK_SIZE;
-    }
-
-    encoded_length
+    decoded_length.div_ceil(ENCODE_CHUNK_SIZE) * DECODE_CHUNK_SIZE
 }
 
 pub fn calculate_decoded_length(encoded_length: usize) -> usize {
@@ -315,7 +234,7 @@ fn pack_decoded_value(
 mod tests {
     use super::{
         calculate_decoded_length, calculate_encoded_length, decode_with_alphabet,
-        encode_with_alphabet, pack_decoded_value, trim_whitespaces, validate_with_alphabet,
+        encode_with_alphabet, pack_decoded_value, trim_whitespaces,
     };
     // Leading `::` disambiguates the external crate from this crate's own `base64` module.
     use ::base64::Engine as _;
@@ -360,10 +279,6 @@ mod tests {
 
     fn decode(input: &[u8], alphabet: &str, padding_symbol: u8) -> Result<Vec<u8>, String> {
         decode_with_alphabet(input, decoding_mapping_of(alphabet), padding_symbol)
-    }
-
-    fn validate(input: &[u8], alphabet: &str, padding_symbol: u8) -> String {
-        validate_with_alphabet(input, alphabet.to_string(), padding_symbol)
     }
 
     fn reference_engine(alphabet: &str, padding: u8) -> GeneralPurpose {
@@ -1369,6 +1284,11 @@ mod tests {
         );
         // A space-padded payload is no longer trimmable from the start.
         assert_eq!(trim_whitespaces(b" Zg  ", b' '), (b" Zg  ".as_slice(), 0));
+        // First occurrence of the padding symbol will stop trimming.
+        assert_eq!(trim_whitespaces(b"\t\n  Zg  ", b' '), (b"  Zg  ".as_slice(), 2));
+        assert_eq!(trim_whitespaces(b" \t\n  Zg  ", b' '), (b" \t\n  Zg  ".as_slice(), 0));
+        assert_eq!(trim_whitespaces(b" Zg  \n\t", b' '), (b" Zg  ".as_slice(), 0));
+        assert_eq!(trim_whitespaces(b" Zg  \n\t ", b' '), (b" Zg  \n\t ".as_slice(), 0));
     }
 
     #[test]
@@ -1407,324 +1327,6 @@ mod tests {
                 trimmed_from_start,
                 payload.len() - payload.trim_ascii_start().len(),
                 "offset for {payload:02x?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_the_rfc4648_section10_test_vectors() {
-        for payload in [
-            "", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy",
-        ] {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                "Valid",
-                "RFC 4648 test vector {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_every_alphabet_as_its_own_payload() {
-        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
-            assert_eq!(
-                validate(alphabet.as_bytes(), alphabet, b'='),
-                "Valid",
-                "alphabet {alphabet}"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_payloads_that_belong_to_another_alphabet() {
-        assert_eq!(validate(b"-_-_", URL_SAFE_ALPHABET, b'='), "Valid");
-        assert_eq!(validate(b"+/+/", STANDARD_ALPHABET, b'='), "Valid");
-        assert!(
-            validate(b"-_-_", STANDARD_ALPHABET, b'=').starts_with("Invalid;"),
-            "the url-safe complementary symbols are not part of the standard alphabet"
-        );
-        assert!(
-            validate(b"+/+/", URL_SAFE_ALPHABET, b'=').starts_with("Invalid;"),
-            "the standard complementary symbols are not part of the url-safe alphabet"
-        );
-    }
-
-    #[test]
-    fn accepts_empty_and_whitespace_only_input() {
-        for payload in ["", " ", "\n", "  \r\n\t ", "\u{c}\u{c}"] {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                "Valid",
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_payloads_surrounded_by_ascii_whitespace() {
-        for payload in [
-            " Zm9vYmFy",
-            "Zm9vYmFy ",
-            "\tZm9vYmFy\r\n",
-            "\n\n  Zm9vYmFy  \n\n",
-        ] {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                "Valid",
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_custom_padding_symbols() {
-        for padding_symbol in *b"=.*~!%" {
-            let padding_char = padding_symbol as char;
-
-            assert_eq!(
-                validate(
-                    format!("Zg{padding_char}{padding_char}").as_bytes(),
-                    STANDARD_ALPHABET,
-                    padding_symbol
-                ),
-                "Valid",
-                "padding {padding_char:?}"
-            );
-            assert_eq!(
-                validate(
-                    format!("Zm8{padding_char}").as_bytes(),
-                    STANDARD_ALPHABET,
-                    padding_symbol
-                ),
-                "Valid",
-                "padding {padding_char:?}"
-            );
-            assert_eq!(
-                validate(b"Zm9v", STANDARD_ALPHABET, padding_symbol),
-                "Valid",
-                "padding {padding_char:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_whitespace_padding_symbols() {
-        // `validate_padding_symbol` accepts 0x20, so the validator must accept it too.
-        assert_eq!(validate(b"Zg  ", STANDARD_ALPHABET, b' '), "Valid");
-        assert_eq!(validate(b"Zm8 ", STANDARD_ALPHABET, b' '), "Valid");
-        assert_eq!(
-            validate(b"\r\nZm9vYmE \r\n", STANDARD_ALPHABET, b' '),
-            "Valid"
-        );
-    }
-
-    #[test]
-    fn accepts_every_payload_the_encoder_produces() {
-        let mut rng = XorShift64(0x512f_aec9_7b31_4d05);
-
-        for length in 0..=96 {
-            let input = rng.bytes(length);
-
-            for (alphabet, padding_symbol) in [
-                (STANDARD_ALPHABET, b'='),
-                (URL_SAFE_ALPHABET, b'.'),
-                (DIGITS_FIRST_ALPHABET, b'*'),
-            ] {
-                let encoded = encode(&input, alphabet, padding_symbol);
-
-                assert_eq!(
-                    validate(encoded.as_bytes(), alphabet, padding_symbol),
-                    "Valid",
-                    "length {length} with alphabet {alphabet}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn reports_malformed_payload_when_the_length_is_not_a_multiple_of_four() {
-        let expectations = [
-            ("Z", "Z"),
-            ("Zm", "Zm"),
-            ("Zm9", "Zm9"),
-            ("Zm9vY", "Y"),
-            ("Zm9vYm", "Ym"),
-            ("Zm9vYmF", "YmF"),
-            ("Zm9vYmFy=", "="),
-        ];
-
-        for (payload, expected_tail) in expectations {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                format!(
-                    "Invalid; Input payload is malformed: unexpected tail bytes detected in the end: '{expected_tail}'"
-                ),
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reports_malformed_payload_after_trimming() {
-        assert_eq!(
-            validate(b"  Zm9  ", STANDARD_ALPHABET, b'='),
-            "Invalid; Input payload is malformed: unexpected tail bytes detected in the end: 'Zm9'"
-        );
-    }
-
-    #[test]
-    fn reports_invalid_symbols_of_a_body_quantum() {
-        let expectations = [
-            ("!m9vYmFy", '!', 1),
-            ("Zm=vYmFy", '=', 3),
-            ("Zm9v!m9vYmFy", '!', 5),
-            ("Zm9vYm9v!m9vYmFy", '!', 9),
-        ];
-
-        for (payload, expected_symbol, expected_position) in expectations {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                format!(
-                    "Invalid; Invalid symbol detected in input payload: '{expected_symbol}' (position: {expected_position})"
-                ),
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reports_invalid_symbols_of_the_final_quantum() {
-        let expectations = [
-            ("Zm9v!mFy", '!', 5),
-            ("Zm9vYm!y", '!', 7),
-            ("Z!==", '!', 2),
-            ("Z=g=", '=', 2),
-            ("=g==", '=', 1),
-        ];
-
-        for (payload, expected_symbol, expected_position) in expectations {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                format!(
-                    "Invalid; Invalid symbol detected in input payload: '{expected_symbol}' (position: {expected_position})"
-                ),
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reports_padding_that_appears_before_the_final_quantum() {
-        // Concatenated padded payloads are not a single valid encoding.
-        for payload in ["Zg==Zg==", "Zm8=Zm9v", "====Zm9v"] {
-            assert!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'=')
-                    .starts_with("Invalid; Invalid symbol detected in input payload"),
-                "unexpected verdict for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reports_more_than_two_padding_symbols() {
-        for payload in ["Z===", "====", "Zm9vY===", "Zm9v===="] {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                "Invalid; More than 2 padding symbols detected",
-                "for {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reports_invalid_symbol_positions_relative_to_the_original_validated_input() {
-        // Positions are 1-based offsets into the payload as the caller supplied it.
-        let expectations = [
-            ("  !m9vYmFy", '!', 3),
-            ("\n\n\nZm9v!m9vYmFy", '!', 8),
-            ("  Zm9v!mFy", '!', 7),
-            ("\t\tZm9vYm!y", '!', 9),
-            ("   Z!==", '!', 5),
-            ("\r\n Zm9vY=g=\r\n", '=', 9),
-        ];
-
-        for (payload, expected_symbol, expected_position) in expectations {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                format!(
-                    "Invalid; Invalid symbol detected in input payload: '{expected_symbol}' (position: {expected_position})"
-                ),
-                "for {payload:?}"
-            );
-            assert_eq!(
-                payload.as_bytes()[expected_position - 1] as char,
-                expected_symbol,
-                "test vector {payload:?} must point at the offending byte"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_binary_payloads() {
-        let payloads: [&[u8]; 3] = [
-            &[0x00, 0xff, 0x00, 0x01],
-            &[0xc3, 0x28, 0xed, 0xa0],
-            &[0xf0, 0x9f, 0x92, 0xa9],
-        ];
-
-        for payload in payloads {
-            assert!(
-                validate(payload, STANDARD_ALPHABET, b'=').starts_with("Invalid;"),
-                "unexpected verdict for {payload:02x?}"
-            );
-        }
-    }
-
-    #[test]
-    fn renders_non_ascii_bytes_as_latin1_symbols() {
-        // `u8 as char` maps the byte onto the matching Latin-1 code point, while the
-        // malformed-tail branch renders the very same byte through a lossy UTF-8 conversion.
-        assert_eq!(
-            validate(b"Zm9v\xffmFy", STANDARD_ALPHABET, b'='),
-            "Invalid; Invalid symbol detected in input payload: '\u{ff}' (position: 5)"
-        );
-        assert_eq!(
-            validate(b"Zm9v\xff", STANDARD_ALPHABET, b'='),
-            "Invalid; Input payload is malformed: unexpected tail bytes detected in the end: '\u{fffd}'"
-        );
-    }
-
-    #[test]
-    fn rejects_everything_the_decoder_rejects_apart_from_non_zero_pad_bits() {
-        let payloads = [
-            "Z", "Zm9", "Zm9vY", "!m9vYmFy", "Zm=vYmFy", "Zm9v!mFy", "Z!==", "Z=g=", "=g==",
-            "Zg==Zg==", "Zm8=Zm9v", "Z===", "====", "Zm9v====", "  Zm9  ",
-        ];
-
-        for payload in payloads {
-            assert!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'=').starts_with("Invalid;"),
-                "unexpected verdict for {payload:?}"
-            );
-            assert!(
-                decode(payload.as_bytes(), STANDARD_ALPHABET, b'=').is_err(),
-                "the decoder must agree on {payload:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn accepts_payloads_the_decoder_rejects_because_of_non_zero_pad_bits() {
-        // Known gap, see the TODO in `validate_with_alphabet`: pad bits are not checked yet.
-        for payload in ["Zh==", "Zm9=", "A/==", "AA/="] {
-            assert_eq!(
-                validate(payload.as_bytes(), STANDARD_ALPHABET, b'='),
-                "Valid",
-                "for {payload:?}"
-            );
-            assert!(
-                decode(payload.as_bytes(), STANDARD_ALPHABET, b'=').is_err(),
-                "the decoder must still reject {payload:?}"
             );
         }
     }

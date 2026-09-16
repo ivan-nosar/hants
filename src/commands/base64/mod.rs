@@ -3,8 +3,6 @@ use clap::Subcommand;
 
 pub mod decode;
 pub mod encode;
-pub mod length;
-pub mod validate;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -67,22 +65,11 @@ pub enum Command {
 
     #[command(about = "Decode input Base64 sequence")]
     Decode(Args),
-
-    #[command(about = "Check if input sequence is a valid Base64 payload")]
-    Validate(Args),
-
-    #[command(
-        about = "Calculate the length of the encoded or decoded sequence for a given input. \
-        This operation doesn't perform any encoding or validation of the input sequence."
-    )]
-    Length(length::Args),
 }
 
 pub fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Encode(args) => encode::run(args),
         Command::Decode(args) => decode::run(args),
-        Command::Validate(args) => validate::run(args),
-        Command::Length(args) => length::run(args),
     }
 }

@@ -95,7 +95,6 @@ pub fn validate_padding_symbol(padding_symbol: char, alphabet: &str) -> Result<u
 }
 
 pub fn build_encoding_alphabet_mapping(alphabet: &str) -> [u8; 64] {
-    // TODO: Read comment below:
     // Building a mapping between 24-bits input and 4 characters of the alphabet output
     // will result in an excessive memory consumption, however, will potentially show faster performance.
     // Now the simple 6-bit input to 1 character output mapping is used. Performance will be optimized

@@ -17,7 +17,7 @@ pub enum Command {
     #[command(about = "Generate a secure password")]
     Password(crate::commands::password::Args),
 
-    #[command(subcommand, about = "Encode/decode/validate Base64 content")]
+    #[command(subcommand, about = "Encode/decode Base64 content")]
     Base64(crate::commands::base64::Command),
     // TODO: Not yet implemented
     // Json(crate::commands::json::Args),
