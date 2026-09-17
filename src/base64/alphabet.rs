@@ -459,7 +459,7 @@ mod tests {
         for alphabet in [DEFAULT_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
             let mapping = build_decoding_alphabet_mapping(alphabet);
 
-            assert_eq!(mapping.len(), 64, "mapping for {alphabet}");
+            assert_eq!(mapping.len(), 256, "mapping for {alphabet}");
             for (index, symbol) in alphabet.bytes().enumerate() {
                 assert_eq!(
                     mapping[symbol as usize], index as u8,
