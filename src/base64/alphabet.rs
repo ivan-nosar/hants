@@ -1,7 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 pub const DEFAULT_ALPHABET: &str =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub const MISSED_ALPHABET_SYMBOL: u8 = 255;
 
 pub fn validate_alphabet(
     alphabet: Option<String>,
@@ -110,13 +112,21 @@ pub fn build_encoding_alphabet_mapping(alphabet: &str) -> [u8; 64] {
     mapping
 }
 
-pub fn build_decoding_alphabet_mapping(alphabet: &str) -> HashMap<u8, u8> {
+pub fn build_decoding_alphabet_mapping(alphabet: &str) -> [u8; 256] {
     // TODO: Read comment below:
     // This is complementary function for the `build_encoding_alphabet_mapping`.
     // They must be updated together.
-    let mut mapping = HashMap::new();
+
+    // The original implementation used a HashMap<u8, u8>, but its lookup overhead had a
+    // significant performance cost for this operation. This implementation trades a small,
+    // fixed amount of memory for faster direct indexing: it allocates entries for all 256
+    // possible byte values, although only 64 are used by the alphabet. Every unused entry is
+    // initialized to `MISSED_ALPHABET_SYMBOL`, which serves as a sentinel indicating that the
+    // byte is not present in the alphabet.
+
+    let mut mapping = [MISSED_ALPHABET_SYMBOL; 256];
     for (i, c) in alphabet.chars().enumerate().take(64) {
-        mapping.insert(c as u8, i as u8);
+        mapping[c as usize] = i as u8;
     }
     mapping
 }
@@ -129,8 +139,9 @@ fn is_printable_character(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ALPHABET, build_decoding_alphabet_mapping, build_encoding_alphabet_mapping,
-        is_printable_character, validate_alphabet, validate_padding_symbol,
+        DEFAULT_ALPHABET, MISSED_ALPHABET_SYMBOL, build_decoding_alphabet_mapping,
+        build_encoding_alphabet_mapping, is_printable_character, validate_alphabet,
+        validate_padding_symbol,
     };
     use std::collections::HashSet;
 
@@ -451,8 +462,7 @@ mod tests {
             assert_eq!(mapping.len(), 64, "mapping for {alphabet}");
             for (index, symbol) in alphabet.bytes().enumerate() {
                 assert_eq!(
-                    mapping.get(&symbol),
-                    Some(&(index as u8)),
+                    mapping[symbol as usize], index as u8,
                     "symbol {:?} of {alphabet}",
                     symbol as char
                 );
@@ -470,7 +480,7 @@ mod tests {
                 let symbol = encoding_mapping[index as usize];
 
                 assert_eq!(
-                    decoding_mapping[&symbol], index,
+                    decoding_mapping[symbol as usize], index,
                     "round trip of index {index} in {alphabet}"
                 );
             }
@@ -482,8 +492,8 @@ mod tests {
         let mapping = build_decoding_alphabet_mapping(DEFAULT_ALPHABET);
 
         for symbol in [b'=', b'-', b'_', b' ', b'~', b'\n', 0x00, 0xff] {
-            assert!(
-                !mapping.contains_key(&symbol),
+            assert_eq!(
+                mapping[symbol as usize], MISSED_ALPHABET_SYMBOL,
                 "{:?} must not be decodable",
                 symbol as char
             );
@@ -495,10 +505,10 @@ mod tests {
         let alphabet = validate_alphabet(None, Some("-_".to_string())).unwrap();
         let mapping = build_decoding_alphabet_mapping(&alphabet);
 
-        assert_eq!(mapping[&b'-'], 62);
-        assert_eq!(mapping[&b'_'], 63);
-        assert!(!mapping.contains_key(&b'+'));
-        assert!(!mapping.contains_key(&b'/'));
+        assert_eq!(mapping[b'-' as usize], 62);
+        assert_eq!(mapping[b'_' as usize], 63);
+        assert_eq!(mapping[b'+' as usize], MISSED_ALPHABET_SYMBOL);
+        assert_eq!(mapping[b'/' as usize], MISSED_ALPHABET_SYMBOL);
     }
 
     #[test]

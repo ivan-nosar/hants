@@ -1,8 +1,12 @@
-use std::collections::HashMap;
+use crate::base64::alphabet::MISSED_ALPHABET_SYMBOL;
 
 const ENCODE_CHUNK_SIZE: usize = 3;
 const DECODE_CHUNK_SIZE: usize = 4;
 const SIX_BITS_MASK: u32 = 0x3f;
+
+// TODO: 1. Route notes/warnings/errors to the STDERR, valid result - to STDOUT
+// TODO: 2. Support --no-pad option in base64
+// TODO:   2.1. Emit warning when --no-pad is used along with padding-symbol, but continue processing
 
 pub fn encode_with_alphabet(
     input_bytes: &[u8],
@@ -58,14 +62,13 @@ pub fn encode_with_alphabet(
 
 pub fn decode_with_alphabet(
     input_bytes: &[u8],
-    alphabet_mapping: HashMap<u8, u8>,
+    alphabet_mapping: [u8; 256],
     padding_symbol: u8,
 ) -> Result<Vec<u8>, String> {
     const BITS_PER_SYMBOL: u8 = 6;
     const BITS_PER_BYTE: usize = 8;
     const WORD_SIZE_IN_BITS: u8 = 32;
 
-    // TODO: Low performance. Optimize
     // Trim from start and end: leading and trailing whitespaces are acceptable
     let (trimmed_input_bytes, trimmed_from_start) = trim_whitespaces(input_bytes, padding_symbol);
 
@@ -88,8 +91,9 @@ pub fn decode_with_alphabet(
 
     // Process "body" of input payload (sequence chunks without padding symbols)
     for (index, chunk) in chunks[..chunks.len() - 1].iter().enumerate() {
-        if let Some(invalid_char_index) =
-            chunk.iter().position(|c| !alphabet_mapping.contains_key(c))
+        if let Some(invalid_char_index) = chunk
+            .iter()
+            .position(|c| alphabet_mapping[*c as usize] == MISSED_ALPHABET_SYMBOL)
         {
             let char_position_in_payload =
                 trimmed_from_start + index * DECODE_CHUNK_SIZE + invalid_char_index + 1;
@@ -100,10 +104,10 @@ pub fn decode_with_alphabet(
             ));
         }
 
-        let bit_group_1 = alphabet_mapping[&chunk[0]] as u32 & SIX_BITS_MASK;
-        let bit_group_2 = alphabet_mapping[&chunk[1]] as u32 & SIX_BITS_MASK;
-        let bit_group_3 = alphabet_mapping[&chunk[2]] as u32 & SIX_BITS_MASK;
-        let bit_group_4 = alphabet_mapping[&chunk[3]] as u32 & SIX_BITS_MASK;
+        let bit_group_1 = alphabet_mapping[chunk[0] as usize] as u32 & SIX_BITS_MASK;
+        let bit_group_2 = alphabet_mapping[chunk[1] as usize] as u32 & SIX_BITS_MASK;
+        let bit_group_3 = alphabet_mapping[chunk[2] as usize] as u32 & SIX_BITS_MASK;
+        let bit_group_4 = alphabet_mapping[chunk[3] as usize] as u32 & SIX_BITS_MASK;
 
         let decoded_chunk_value =
             bit_group_1 << 26 | bit_group_2 << 20 | bit_group_3 << 14 | bit_group_4 << 8;
@@ -127,7 +131,7 @@ pub fn decode_with_alphabet(
     let tail_without_padding = &tail[..DECODE_CHUNK_SIZE - padding_symbols_count];
     let mut decoded_tail_value = 0_u32;
     for (index, symbol) in tail_without_padding.iter().enumerate() {
-        if !alphabet_mapping.contains_key(symbol) {
+        if alphabet_mapping[*symbol as usize] == MISSED_ALPHABET_SYMBOL {
             let char_position_in_payload =
                 trimmed_from_start + (chunks.len() - 1) * DECODE_CHUNK_SIZE + index + 1;
 
@@ -138,7 +142,8 @@ pub fn decode_with_alphabet(
         }
 
         let bitwise_shift = WORD_SIZE_IN_BITS - (index as u8 + 1) * BITS_PER_SYMBOL;
-        decoded_tail_value |= (alphabet_mapping[symbol] as u32 & SIX_BITS_MASK) << bitwise_shift;
+        decoded_tail_value |=
+            (alphabet_mapping[*symbol as usize] as u32 & SIX_BITS_MASK) << bitwise_shift;
     }
 
     // RFC 4648 section 3.5: bits of the last symbol that carry no data must be zero.
@@ -221,13 +226,10 @@ fn pack_decoded_value(
     // first 6 bits from the left corresponds to the most significant bits of chunk[0].
     let decoded_tail_bytes = u32::to_be_bytes(decoded_value);
 
-    // TODO: Suboptimal. Unfold loop.
     // Usually only 3 leading bytes are required: last byte is empty. The only exception is tail:
     // based on number of padding symbols there might be 1, 2, or 3 meaningful bytes.
     let bytes_to_put_count = meaningful_bytes_count.unwrap_or(ENCODE_CHUNK_SIZE);
-    for byte in decoded_tail_bytes.iter().take(bytes_to_put_count) {
-        decoded_buffer.push(*byte);
-    }
+    decoded_buffer.extend_from_slice(&decoded_tail_bytes[..bytes_to_put_count]);
 }
 
 #[cfg(test)]
@@ -237,10 +239,10 @@ mod tests {
         encode_with_alphabet, pack_decoded_value, trim_whitespaces,
     };
     // Leading `::` disambiguates the external crate from this crate's own `base64` module.
+    use crate::base64::alphabet::MISSED_ALPHABET_SYMBOL;
     use ::base64::Engine as _;
     use ::base64::alphabet::{Alphabet, Symbol};
     use ::base64::engine::general_purpose::{self, GeneralPurpose};
-    use std::collections::HashMap;
 
     const STANDARD_ALPHABET: &str =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -266,15 +268,15 @@ mod tests {
         encode_with_alphabet(input, mapping_of(alphabet), padding_symbol)
     }
 
-    fn decoding_mapping_of(alphabet: &str) -> HashMap<u8, u8> {
+    fn decoding_mapping_of(alphabet: &str) -> [u8; 256] {
         let bytes = alphabet.as_bytes();
         assert_eq!(bytes.len(), 64, "test alphabet must be 64 ASCII bytes");
 
-        bytes
-            .iter()
-            .enumerate()
-            .map(|(index, &symbol)| (symbol, index as u8))
-            .collect()
+        let mut mapping = [MISSED_ALPHABET_SYMBOL; 256];
+        for (i, c) in alphabet.chars().enumerate().take(64) {
+            mapping[c as usize] = i as u8;
+        }
+        mapping
     }
 
     fn decode(input: &[u8], alphabet: &str, padding_symbol: u8) -> Result<Vec<u8>, String> {
