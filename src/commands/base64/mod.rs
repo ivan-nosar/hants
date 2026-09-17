@@ -44,6 +44,7 @@ pub struct Args {
         short = 'c',
         long = "complementary-symbols",
         conflicts_with = "alphabet",
+        allow_hyphen_values = true,
         help = "Use symbols provided as a replacement for default complementary symbols \n\
         (63th and 64th character in alphabet: +/)."
     )]
