@@ -47,10 +47,13 @@ pub fn write_output_bytes(target: IoTarget, content: &[u8]) -> Result<(), String
 
     match target {
         IoTarget::Console => match String::from_utf8_lossy(content) {
-            Cow::Owned(result) => println!(
-                "Note: binary data detected; the visible representation may not reflect the actual content.\n{}",
-                result
-            ),
+            Cow::Owned(result) => {
+                eprintln!(
+                    "Note: binary data detected; the visible representation may not reflect the actual content."
+                );
+
+                println!("{}", result)
+            },
             Cow::Borrowed(result) => println!("{}", result),
         },
         IoTarget::Clipboard => {
@@ -58,7 +61,7 @@ pub fn write_output_bytes(target: IoTarget, content: &[u8]) -> Result<(), String
 
             match String::from_utf8_lossy(content) {
                 Cow::Owned(result) => {
-                    println!(
+                    eprintln!(
                         "Note: binary data detected; the visible representation may not reflect the actual content."
                     );
 
