@@ -34,8 +34,8 @@ pub struct Args {
         short = 'a',
         long = "alphabet",
         conflicts_with = "complementary_symbols",
-        help = "Use custom alphabet. Must be a string consisting of exactly \n\
-        64 unique symbols. If not provided - default alphabet is used: \n\
+        help = "Use custom alphabet. Must be a string consisting of exactly\n\
+        64 unique symbols. If not provided - default alphabet is used:\n\
         ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     )]
     alphabet: Option<String>,
@@ -45,7 +45,7 @@ pub struct Args {
         long = "complementary-symbols",
         conflicts_with = "alphabet",
         allow_hyphen_values = true,
-        help = "Use symbols provided as a replacement for default complementary symbols \n\
+        help = "Use symbols provided as a replacement for default complementary symbols\n\
         (63th and 64th character in alphabet: +/)."
     )]
     complementary_symbols: Option<String>,
@@ -53,10 +53,21 @@ pub struct Args {
     #[arg(
         short = 'p',
         long = "padding-symbol",
+        conflicts_with = "no_pad",
         help = "Use symbol provided as padding character.",
         default_value = "="
     )]
     padding_symbol: char,
+
+    #[arg(
+        short = 'n',
+        long = "no-pad",
+        conflicts_with = "padding_symbol",
+        help = "Disable padding. When encoding, no trailing padding symbols\n\
+        are emitted; when decoding, the input is expected to carry none.",
+        action = clap::ArgAction::SetTrue
+    )]
+    no_pad: bool,
 }
 
 #[derive(Subcommand)]

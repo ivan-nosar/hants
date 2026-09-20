@@ -19,7 +19,7 @@ cargo clippy --all-targets --all-features
 Apply Clippy recommendations for all targets and features:
 
 ```sh
-cargo clippy --all-targets --all-features --fix
+cargo clippy --all-targets --all-features --allow-dirty --fix
 ```
 
 Check formatting without changing files:

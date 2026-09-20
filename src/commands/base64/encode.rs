@@ -8,7 +8,7 @@ use crate::io::{read_input_bytes, write_output_string};
 pub fn run(args: Args) -> Result<(), String> {
     let alphabet = validate_alphabet(args.alphabet, args.complementary_symbols)?;
 
-    let padding_symbol = validate_padding_symbol(args.padding_symbol, &alphabet)?;
+    let padding_symbol = validate_padding_symbol(args.padding_symbol, args.no_pad, &alphabet)?;
 
     let alphabet_mapping = build_encoding_alphabet_mapping(&alphabet);
 
@@ -49,6 +49,7 @@ mod tests {
             alphabet: None,
             complementary_symbols: None,
             padding_symbol: '=',
+            no_pad: false,
         }
     }
 
@@ -111,6 +112,147 @@ mod tests {
         run(args).unwrap();
 
         assert_eq!(fs::read_to_string(path).unwrap(), "Zg..");
+    }
+
+    #[test]
+    fn encodes_file_input_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"foobar");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn encodes_every_tail_shape_without_padding() {
+        for (payload, expected) in [
+            (b"f".as_slice(), "Zg"),
+            (b"fo", "Zm8"),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg"),
+            (b"fooba", "Zm9vYmE"),
+            (b"foobar", "Zm9vYmFy"),
+        ] {
+            let dir = tempdir().unwrap();
+            let input = input_target(&dir, payload);
+            let (output, path) = output_target(&dir);
+            let mut args = args(input, output);
+            args.no_pad = true;
+
+            run(args).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                expected,
+                "for {payload:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_binary_file_input_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, &[0x14, 0xfb, 0x9c, 0x03, 0xd9]);
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "FPucA9k");
+    }
+
+    #[test]
+    fn encodes_empty_input_to_empty_output_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "");
+    }
+
+    #[test]
+    fn encodes_with_custom_alphabet_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"fo");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.alphabet = Some(DIGITS_FIRST_ALPHABET.to_string());
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "Pcy");
+    }
+
+    #[test]
+    fn encodes_with_complementary_symbols_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, &[0xfb, 0xff]);
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.complementary_symbols = Some("-_".to_string());
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "-_8");
+    }
+
+    #[test]
+    fn ignores_the_padding_symbol_when_padding_is_disabled() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"f");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.padding_symbol = '.';
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read_to_string(path).unwrap(), "Zg");
+    }
+
+    #[test]
+    fn skips_padding_symbol_validation_when_padding_is_disabled() {
+        // Both symbols are rejected by `validate_padding_symbol` unless `--no-pad` short-circuits it.
+        for padding_symbol in ['+', '\n'] {
+            let dir = tempdir().unwrap();
+            let input = input_target(&dir, b"f");
+            let (output, path) = output_target(&dir);
+            let mut args = args(input, output);
+            args.padding_symbol = padding_symbol;
+            args.no_pad = true;
+
+            run(args).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                "Zg",
+                "for {padding_symbol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_err_when_alphabet_is_invalid_and_padding_is_disabled() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"foobar");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.alphabet = Some("too-short".to_string());
+        args.no_pad = true;
+
+        assert!(run(args).is_err());
+        assert!(!path.exists(), "no output must be produced on failure");
     }
 
     #[test]

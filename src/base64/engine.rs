@@ -4,14 +4,10 @@ const ENCODE_CHUNK_SIZE: usize = 3;
 const DECODE_CHUNK_SIZE: usize = 4;
 const SIX_BITS_MASK: u32 = 0x3f;
 
-// TODO: 1. Route notes/warnings/errors to the STDERR, valid result - to STDOUT
-// TODO: 2. Support --no-pad option in base64
-// TODO:   2.1. Emit warning when --no-pad is used along with padding-symbol, but continue processing
-
 pub fn encode_with_alphabet(
     input_bytes: &[u8],
     alphabet_mapping: [u8; 64],
-    padding_symbol: u8,
+    padding_symbol: Option<u8>,
 ) -> String {
     let mut encoded_buffer: Vec<char> =
         Vec::with_capacity(calculate_encoded_length(input_bytes.len()));
@@ -37,15 +33,18 @@ pub fn encode_with_alphabet(
     }
 
     // Process tail of input payload (sequence of 1 or 2 remaining bytes)
-    let padding_char = padding_symbol as char;
     if tail.len() == 1 {
         let tail_value = u16::from_be_bytes([tail[0], 0]);
         encoded_buffer
             .push(alphabet_mapping[((tail_value >> 10) & (SIX_BITS_MASK as u16)) as usize] as char);
         encoded_buffer
             .push(alphabet_mapping[((tail_value >> 4) & (SIX_BITS_MASK as u16)) as usize] as char);
-        encoded_buffer.push(padding_char);
-        encoded_buffer.push(padding_char);
+
+        if let Some(defined_padding_symbol) = padding_symbol {
+            let padding_char = defined_padding_symbol as char;
+            encoded_buffer.push(padding_char);
+            encoded_buffer.push(padding_char);
+        }
     } else if tail.len() == 2 {
         let tail_value = u16::from_be_bytes([tail[0], tail[1]]);
         encoded_buffer
@@ -54,7 +53,11 @@ pub fn encode_with_alphabet(
             .push(alphabet_mapping[((tail_value >> 4) & (SIX_BITS_MASK as u16)) as usize] as char);
         encoded_buffer
             .push(alphabet_mapping[((tail_value << 2) & (SIX_BITS_MASK as u16)) as usize] as char);
-        encoded_buffer.push(padding_char);
+
+        if let Some(defined_padding_symbol) = padding_symbol {
+            let padding_char = defined_padding_symbol as char;
+            encoded_buffer.push(padding_char);
+        }
     }
 
     encoded_buffer.into_iter().collect()
@@ -63,7 +66,7 @@ pub fn encode_with_alphabet(
 pub fn decode_with_alphabet(
     input_bytes: &[u8],
     alphabet_mapping: [u8; 256],
-    padding_symbol: u8,
+    padding_symbol: Option<u8>,
 ) -> Result<Vec<u8>, String> {
     const BITS_PER_SYMBOL: u8 = 6;
     const BITS_PER_BYTE: usize = 8;
@@ -79,18 +82,105 @@ pub fn decode_with_alphabet(
     let mut decoded_buffer: Vec<u8> =
         Vec::with_capacity(calculate_decoded_length(trimmed_input_bytes.len()));
 
-    // Current implementation demands paddings to be set correctly, so no "tail" expected.
-    let (chunks, tail) = trimmed_input_bytes.as_chunks::<DECODE_CHUNK_SIZE>();
-
-    if !tail.is_empty() {
+    // A final chunk shorter than 4 symbols is only acceptable when `--no-pad` is active: the
+    // symbols that padding would have occupied are simply absent. Otherwise the input has to be
+    // aligned to the decoding block size.
+    if padding_symbol.is_some() && trimmed_input_bytes.len() % DECODE_CHUNK_SIZE != 0 {
         return Err(format!(
-            "input payload is malformed: unexpected tail bytes detected in the end: '{}'",
-            String::from_utf8_lossy(tail)
+            "input payload is malformed: its length must be aligned to the decoding block \
+            size of 4 bytes, but the actual length is {} bytes.",
+            trimmed_input_bytes.len()
+        ));
+    }
+
+    // When the input is aligned to the decoding block size, `as_chunks` leaves the tail empty and
+    // the padding symbols end up inside the last chunk. Decoding the tail requires different logic
+    // because of that padding, so the last chunk is always split off explicitly.
+    let (mut chunks, mut tail) = trimmed_input_bytes.as_chunks::<DECODE_CHUNK_SIZE>();
+
+    if tail.is_empty() {
+        (chunks, tail) = (&chunks[..chunks.len() - 1], &chunks[chunks.len() - 1]);
+    }
+
+    // The tail is the most error-prone part of the payload, so it is processed ahead of the body:
+    // a malformed tail fails fast, before any compute cycles are spent on decoding the body.
+
+    // Process last chunk (also known as tail). It can contain 0, 1, or 2 padding chars.
+    // Calculate number of trailing padding symbols and adjust output buffer size based on that.
+    let padding_symbols_count = if let Some(defined_padding_symbol) = padding_symbol {
+        let padding_symbols_count = tail
+            .iter()
+            .rev()
+            .take_while(|&&symbol| symbol == defined_padding_symbol)
+            .count();
+
+        if padding_symbols_count > 2 {
+            return Err(format!(
+                "input payload is malformed: not more than 2 padding symbols is expected, \
+                but {} found.",
+                padding_symbols_count
+            ));
+        }
+
+        tail = &tail[..DECODE_CHUNK_SIZE - padding_symbols_count];
+        padding_symbols_count
+    } else {
+        0
+    };
+
+    // The meaningful part of the tail can never be shorter than 2 symbols: even a single source
+    // byte needs 2 symbols to carry its 8 bits.
+    if tail.len() < 2 {
+        return Err(format!(
+            "input payload is malformed: meaningful tail can't be shorter than 2 symbols, but found {}: '{}'.",
+            tail.len(),
+            &String::from_utf8_lossy(tail)
+        ));
+    }
+
+    let mut decoded_tail_value = 0_u32;
+    for (index, symbol) in tail.iter().enumerate() {
+        if alphabet_mapping[*symbol as usize] == MISSED_ALPHABET_SYMBOL {
+            let char_position_in_payload =
+                trimmed_from_start + chunks.len() * DECODE_CHUNK_SIZE + index + 1;
+
+            return Err(invalid_symbol_at_position_message(
+                *symbol as char,
+                char_position_in_payload,
+            ));
+        }
+
+        let bitwise_shift = WORD_SIZE_IN_BITS - (index as u8 + 1) * BITS_PER_SYMBOL;
+        decoded_tail_value |=
+            (alphabet_mapping[*symbol as usize] as u32 & SIX_BITS_MASK) << bitwise_shift;
+    }
+
+    // Number of bytes in `decoded_tail_value` that carry actual decoded bits.
+    let meaningful_bytes_count = if padding_symbol.is_some() {
+        ENCODE_CHUNK_SIZE - padding_symbols_count
+    } else {
+        // Formally this is `floor((tail.len() * BITS_PER_SYMBOL) / BITS_PER_BYTE)`, but the tail is
+        // never longer than 4 symbols, so a plain subtraction yields the same result and looks much simpler:
+        // - 1 source byte -> 8 bits -> 2 encoded symbols (4 bits are padding zeroes)
+        // - 2 source bytes -> 16 meaningful bits -> 3 encoded symbols (2 bits are padding zeroes)
+        // - 3 source bytes -> 24 meaningful bits -> 4 encoded symbols (0 padding zeroes)
+        tail.len() - 1
+    };
+
+    // RFC 4648 section 3.5: bits of the last symbol that carry no data must be zero.
+    if decoded_tail_value & (u32::MAX >> (meaningful_bytes_count * BITS_PER_BYTE)) != 0 {
+        let last_symbol_index = tail.len() - 1;
+        let char_position_in_payload =
+            trimmed_from_start + chunks.len() * DECODE_CHUNK_SIZE + last_symbol_index + 1;
+
+        return Err(format!(
+            "non-zero padding bits detected in input payload: '{}' (position: {})",
+            tail[last_symbol_index] as char, char_position_in_payload
         ));
     }
 
     // Process "body" of input payload (sequence chunks without padding symbols)
-    for (index, chunk) in chunks[..chunks.len() - 1].iter().enumerate() {
+    for (index, chunk) in chunks.iter().enumerate() {
         if let Some(invalid_char_index) = chunk
             .iter()
             .position(|c| alphabet_mapping[*c as usize] == MISSED_ALPHABET_SYMBOL)
@@ -98,9 +188,9 @@ pub fn decode_with_alphabet(
             let char_position_in_payload =
                 trimmed_from_start + index * DECODE_CHUNK_SIZE + invalid_char_index + 1;
 
-            return Err(format!(
-                "invalid symbol detected in input payload: '{}' (position: {})",
-                chunk[invalid_char_index] as char, char_position_in_payload
+            return Err(invalid_symbol_at_position_message(
+                chunk[invalid_char_index] as char,
+                char_position_in_payload,
             ));
         }
 
@@ -115,50 +205,7 @@ pub fn decode_with_alphabet(
         pack_decoded_value(decoded_chunk_value, None, &mut decoded_buffer);
     }
 
-    // Process last chunk (also known as tail). It can contain 0, 1, or 2 padding chars.
-    // Calculate number of trailing padding symbols and adjust output buffer size based on that.
-    let tail = chunks[chunks.len() - 1];
-    let padding_symbols_count = tail
-        .iter()
-        .rev()
-        .take_while(|&&symbol| symbol == padding_symbol)
-        .count();
-
-    if padding_symbols_count > 2 {
-        return Err("more than 2 padding symbols detected".to_string());
-    }
-
-    let tail_without_padding = &tail[..DECODE_CHUNK_SIZE - padding_symbols_count];
-    let mut decoded_tail_value = 0_u32;
-    for (index, symbol) in tail_without_padding.iter().enumerate() {
-        if alphabet_mapping[*symbol as usize] == MISSED_ALPHABET_SYMBOL {
-            let char_position_in_payload =
-                trimmed_from_start + (chunks.len() - 1) * DECODE_CHUNK_SIZE + index + 1;
-
-            return Err(format!(
-                "invalid symbol detected in input payload: '{}' (position: {})",
-                *symbol as char, char_position_in_payload
-            ));
-        }
-
-        let bitwise_shift = WORD_SIZE_IN_BITS - (index as u8 + 1) * BITS_PER_SYMBOL;
-        decoded_tail_value |=
-            (alphabet_mapping[*symbol as usize] as u32 & SIX_BITS_MASK) << bitwise_shift;
-    }
-
-    // RFC 4648 section 3.5: bits of the last symbol that carry no data must be zero.
-    let meaningful_bytes_count = ENCODE_CHUNK_SIZE - padding_symbols_count;
-    if decoded_tail_value & (u32::MAX >> (meaningful_bytes_count * BITS_PER_BYTE)) != 0 {
-        let last_symbol_index = tail_without_padding.len() - 1;
-        let char_position_in_payload =
-            trimmed_from_start + (chunks.len() - 1) * DECODE_CHUNK_SIZE + last_symbol_index + 1;
-
-        return Err(format!(
-            "non-zero padding bits detected in input payload: '{}' (position: {})",
-            tail_without_padding[last_symbol_index] as char, char_position_in_payload
-        ));
-    }
-
+    // Pack the preliminary-calculated tail data to the output buffer
     pack_decoded_value(
         decoded_tail_value,
         Some(meaningful_bytes_count),
@@ -173,21 +220,25 @@ pub fn calculate_encoded_length(decoded_length: usize) -> usize {
 }
 
 pub fn calculate_decoded_length(encoded_length: usize) -> usize {
-    // This function gives a best-effort assumption: precise value
-    // may be 1 or 2 bytes less because to padding symbols.
-    (encoded_length / DECODE_CHUNK_SIZE) * ENCODE_CHUNK_SIZE
+    // This function gives a best-effort assumption that may overshoot the actual decoded
+    // length by 1 or 2 bytes: the precise value may be 1 or 2 bytes less because of
+    // padding symbols.
+    let message_chunks_count = (encoded_length as f64 / DECODE_CHUNK_SIZE as f64).ceil() as usize;
+
+    message_chunks_count * ENCODE_CHUNK_SIZE
 }
 
-fn trim_whitespaces(input_bytes: &[u8], padding_symbol: u8) -> (&[u8], usize) {
+fn trim_whitespaces(input_bytes: &[u8], padding_symbol: Option<u8>) -> (&[u8], usize) {
     const SPACE_CHAR_CODE: u8 = 0x20;
     const HORIZONTAL_TAB_CHAR_CODE: u8 = 0x9;
     const LINE_FEED_CHAR_CODE: u8 = 0xA;
     const FORM_FEED_CHAR_CODE: u8 = 0xC;
     const CARRIAGE_RETURN_CHAR_CODE: u8 = 0xD;
 
-    // A whitespace padding symbol carries data, so it must survive trimming.
+    // A whitespace padding symbol carries data, so it must survive trimming. When padding is
+    // disabled there is nothing to preserve and every ASCII whitespace byte is trimmable.
     let is_trimmable = |symbol: u8| {
-        symbol != padding_symbol
+        padding_symbol != Some(symbol)
             && matches!(
                 symbol,
                 SPACE_CHAR_CODE
@@ -232,6 +283,13 @@ fn pack_decoded_value(
     decoded_buffer.extend_from_slice(&decoded_tail_bytes[..bytes_to_put_count]);
 }
 
+fn invalid_symbol_at_position_message(symbol: char, position: usize) -> String {
+    format!(
+        "input payload is malformed: invalid symbol '{}' (position: {})",
+        symbol, position
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -264,7 +322,7 @@ mod tests {
         mapping
     }
 
-    fn encode(input: &[u8], alphabet: &str, padding_symbol: u8) -> String {
+    fn encode(input: &[u8], alphabet: &str, padding_symbol: Option<u8>) -> String {
         encode_with_alphabet(input, mapping_of(alphabet), padding_symbol)
     }
 
@@ -279,7 +337,7 @@ mod tests {
         mapping
     }
 
-    fn decode(input: &[u8], alphabet: &str, padding_symbol: u8) -> Result<Vec<u8>, String> {
+    fn decode(input: &[u8], alphabet: &str, padding_symbol: Option<u8>) -> Result<Vec<u8>, String> {
         decode_with_alphabet(input, decoding_mapping_of(alphabet), padding_symbol)
     }
 
@@ -295,6 +353,13 @@ mod tests {
         reference_engine(alphabet, padding).encode(input)
     }
 
+    /// RFC 4648 section 3.2 permits omitting the padding; this drops it from a padded payload.
+    fn reference_encode_without_padding(input: &[u8], alphabet: &str) -> String {
+        reference_encode(input, alphabet, b'=')
+            .trim_end_matches('=')
+            .to_string()
+    }
+
     /// Packs 6-bit values back into octets; requires a multiple of 4 values.
     fn pack_six_bit_values(values: &[u8]) -> Vec<u8> {
         assert_eq!(values.len() % 4, 0);
@@ -307,6 +372,11 @@ mod tests {
         reference_engine(STANDARD_ALPHABET, b'=')
             .decode(symbols)
             .expect("six-bit values must form a canonical base64 payload")
+    }
+
+    /// 68-symbol body holding a symbol outside the alphabet at position 1, followed by `tail`.
+    fn payload_with_malformed_body(tail: &str) -> String {
+        format!("!m9v{}{tail}", "Zm9v".repeat(16))
     }
 
     struct XorShift64(u64);
@@ -338,7 +408,7 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                encode(input.as_bytes(), STANDARD_ALPHABET, b'='),
+                encode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')),
                 expected,
                 "RFC 4648 test vector for {input:?}"
             );
@@ -355,7 +425,45 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                encode(input, STANDARD_ALPHABET, b'='),
+                encode(input, STANDARD_ALPHABET, Some(b'=')),
+                expected,
+                "RFC 4648 illustration for {input:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_rfc4648_section10_test_vectors_without_padding() {
+        let vectors = [
+            ("", ""),
+            ("f", "Zg"),
+            ("fo", "Zm8"),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg"),
+            ("fooba", "Zm9vYmE"),
+            ("foobar", "Zm9vYmFy"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                encode(input.as_bytes(), STANDARD_ALPHABET, None),
+                expected,
+                "RFC 4648 test vector for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_rfc4648_section9_binary_illustrations_without_padding() {
+        let vectors: [(&[u8], &str); 3] = [
+            (&[0x14, 0xfb, 0x9c, 0x03, 0xd9, 0x7e], "FPucA9l+"),
+            (&[0x14, 0xfb, 0x9c, 0x03, 0xd9], "FPucA9k"),
+            (&[0x14, 0xfb, 0x9c, 0x03], "FPucAw"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                encode(input, STANDARD_ALPHABET, None),
                 expected,
                 "RFC 4648 illustration for {input:02x?}"
             );
@@ -365,7 +473,14 @@ mod tests {
     #[test]
     fn encodes_empty_input_to_empty_output() {
         for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
-            assert_eq!(encode(&[], alphabet, b'='), "");
+            assert_eq!(encode(&[], alphabet, Some(b'=')), "");
+        }
+    }
+
+    #[test]
+    fn encodes_empty_input_to_empty_output_without_padding() {
+        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            assert_eq!(encode(&[], alphabet, None), "");
         }
     }
 
@@ -375,7 +490,18 @@ mod tests {
         let input = pack_six_bit_values(&indices);
 
         for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
-            assert_eq!(encode(&input, alphabet, b'='), alphabet);
+            assert_eq!(encode(&input, alphabet, Some(b'=')), alphabet);
+        }
+    }
+
+    #[test]
+    fn encodes_every_alphabet_index_in_order_without_padding() {
+        // The input is a whole number of quanta, so disabling padding changes nothing.
+        let indices: Vec<u8> = (0..64).collect();
+        let input = pack_six_bit_values(&indices);
+
+        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            assert_eq!(encode(&input, alphabet, None), alphabet);
         }
     }
 
@@ -389,8 +515,22 @@ mod tests {
         ];
 
         for (input, standard, url_safe) in vectors {
-            assert_eq!(encode(input, STANDARD_ALPHABET, b'='), standard);
-            assert_eq!(encode(input, URL_SAFE_ALPHABET, b'='), url_safe);
+            assert_eq!(encode(input, STANDARD_ALPHABET, Some(b'=')), standard);
+            assert_eq!(encode(input, URL_SAFE_ALPHABET, Some(b'=')), url_safe);
+        }
+    }
+
+    #[test]
+    fn url_safe_alphabet_replaces_the_62nd_and_63rd_symbols_without_padding() {
+        let vectors: [(&[u8], &str, &str); 3] = [
+            (&[0xfb, 0xef, 0xbe], "++++", "----"),
+            (&[0xff, 0xff, 0xff], "////", "____"),
+            (&[0xfb, 0xff, 0xbf], "+/+/", "-_-_"),
+        ];
+
+        for (input, standard, url_safe) in vectors {
+            assert_eq!(encode(input, STANDARD_ALPHABET, None), standard);
+            assert_eq!(encode(input, URL_SAFE_ALPHABET, None), url_safe);
         }
     }
 
@@ -404,7 +544,24 @@ mod tests {
         ];
 
         for (input, expected) in vectors {
-            assert_eq!(encode(input.as_bytes(), URL_SAFE_ALPHABET, b'='), expected);
+            assert_eq!(
+                encode(input.as_bytes(), URL_SAFE_ALPHABET, Some(b'=')),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn url_safe_alphabet_keeps_alphanumeric_vectors_unchanged_without_padding() {
+        let vectors = [
+            ("f", "Zg"),
+            ("fo", "Zm8"),
+            ("foo", "Zm9v"),
+            ("foobar", "Zm9vYmFy"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(encode(input.as_bytes(), URL_SAFE_ALPHABET, None), expected);
         }
     }
 
@@ -420,7 +577,26 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                encode(input.as_bytes(), DIGITS_FIRST_ALPHABET, b'='),
+                encode(input.as_bytes(), DIGITS_FIRST_ALPHABET, Some(b'=')),
+                expected,
+                "digits-first alphabet for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reordered_alphabet_produces_permuted_output_without_padding() {
+        let vectors = [
+            ("", ""),
+            ("f", "PW"),
+            ("fo", "Pcy"),
+            ("foo", "Pczl"),
+            ("foobar", "PczlOc5o"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                encode(input.as_bytes(), DIGITS_FIRST_ALPHABET, None),
                 expected,
                 "digits-first alphabet for {input:?}"
             );
@@ -433,14 +609,38 @@ mod tests {
             let padding_char = padding_symbol as char;
 
             assert_eq!(
-                encode(b"f", STANDARD_ALPHABET, padding_symbol),
+                encode(b"f", STANDARD_ALPHABET, Some(padding_symbol)),
                 format!("Zg{padding_char}{padding_char}")
             );
             assert_eq!(
-                encode(b"fo", STANDARD_ALPHABET, padding_symbol),
+                encode(b"fo", STANDARD_ALPHABET, Some(padding_symbol)),
                 format!("Zm8{padding_char}")
             );
-            assert_eq!(encode(b"foo", STANDARD_ALPHABET, padding_symbol), "Zm9v");
+            assert_eq!(
+                encode(b"foo", STANDARD_ALPHABET, Some(padding_symbol)),
+                "Zm9v"
+            );
+        }
+    }
+
+    #[test]
+    fn emits_no_padding_symbol_at_all_when_padding_is_disabled() {
+        assert_eq!(encode(b"f", STANDARD_ALPHABET, None), "Zg");
+        assert_eq!(encode(b"fo", STANDARD_ALPHABET, None), "Zm8");
+        assert_eq!(encode(b"foo", STANDARD_ALPHABET, None), "Zm9v");
+
+        // Whatever `--padding-symbol` would have produced is absent from the output.
+        for padding_symbol in *b"=.*~! %A" {
+            let padding_char = padding_symbol as char;
+
+            for input in [b"f".as_slice(), b"fo", b"foo", b"foobar"] {
+                let encoded = encode(input, STANDARD_ALPHABET, None);
+
+                assert!(
+                    !encoded.ends_with(padding_char),
+                    "{encoded:?} must not end with {padding_char:?}"
+                );
+            }
         }
     }
 
@@ -451,7 +651,7 @@ mod tests {
         let data: Vec<u8> = (0_u8..=32).collect();
 
         for length in 0..=data.len() {
-            let encoded = encode(&data[..length], STANDARD_ALPHABET, PADDING);
+            let encoded = encode(&data[..length], STANDARD_ALPHABET, Some(PADDING));
             let expected_padding_count = match length % 3 {
                 0 => 0,
                 1 => 2,
@@ -479,12 +679,34 @@ mod tests {
     }
 
     #[test]
+    fn emits_no_padding_for_any_input_remainder() {
+        let data: Vec<u8> = (0_u8..=32).collect();
+
+        for length in 0..=data.len() {
+            let encoded = encode(&data[..length], STANDARD_ALPHABET, None);
+            let padded = encode(&data[..length], STANDARD_ALPHABET, Some(b'='));
+
+            // Every source byte still costs 8 bits, so the output holds ceil(8 * length / 6) symbols.
+            assert_eq!(
+                encoded.chars().count(),
+                (length * 4).div_ceil(3),
+                "unexpected unpadded length for input length {length}"
+            );
+            assert_eq!(
+                encoded,
+                padded.trim_end_matches('='),
+                "unpadded output must equal the padded one without its suffix for length {length}"
+            );
+        }
+    }
+
+    #[test]
     fn zeroes_the_pad_bits_of_the_final_quantum() {
         // RFC 4648 section 3.5: unused bits of the last emitted symbol must be zero.
         let index_of = |symbol: char| STANDARD_ALPHABET.find(symbol).unwrap();
 
         for byte in 0_u8..=255 {
-            let one_byte_tail = encode(&[byte], STANDARD_ALPHABET, b'=');
+            let one_byte_tail = encode(&[byte], STANDARD_ALPHABET, Some(b'='));
             let last_symbol = one_byte_tail.chars().nth(1).unwrap();
             assert_eq!(
                 index_of(last_symbol) & 0b1111,
@@ -492,7 +714,7 @@ mod tests {
                 "one-byte tail {byte:#04x} leaked pad bits"
             );
 
-            let two_byte_tail = encode(&[0x00, byte], STANDARD_ALPHABET, b'=');
+            let two_byte_tail = encode(&[0x00, byte], STANDARD_ALPHABET, Some(b'='));
             let last_symbol = two_byte_tail.chars().nth(2).unwrap();
             assert_eq!(
                 index_of(last_symbol) & 0b11,
@@ -503,25 +725,80 @@ mod tests {
     }
 
     #[test]
+    fn zeroes_the_pad_bits_of_the_final_quantum_without_padding() {
+        // Dropping the padding must not change the data symbols themselves.
+        let index_of = |symbol: char| STANDARD_ALPHABET.find(symbol).unwrap();
+
+        for byte in 0_u8..=255 {
+            let one_byte_tail = encode(&[byte], STANDARD_ALPHABET, None);
+            assert_eq!(one_byte_tail.chars().count(), 2, "tail {byte:#04x}");
+            assert_eq!(
+                index_of(one_byte_tail.chars().nth(1).unwrap()) & 0b1111,
+                0,
+                "one-byte tail {byte:#04x} leaked pad bits"
+            );
+
+            let two_byte_tail = encode(&[0x00, byte], STANDARD_ALPHABET, None);
+            assert_eq!(two_byte_tail.chars().count(), 3, "tail {byte:#04x}");
+            assert_eq!(
+                index_of(two_byte_tail.chars().nth(2).unwrap()) & 0b11,
+                0,
+                "two-byte tail {byte:#04x} leaked pad bits"
+            );
+        }
+    }
+
+    #[test]
     fn encodes_all_zero_and_all_one_byte_sequences() {
-        assert_eq!(encode(&[0x00], STANDARD_ALPHABET, b'='), "AA==");
-        assert_eq!(encode(&[0x00; 2], STANDARD_ALPHABET, b'='), "AAA=");
-        assert_eq!(encode(&[0x00; 3], STANDARD_ALPHABET, b'='), "AAAA");
-        assert_eq!(encode(&[0x00; 6], STANDARD_ALPHABET, b'='), "AAAAAAAA");
-        assert_eq!(encode(&[0xff], STANDARD_ALPHABET, b'='), "/w==");
-        assert_eq!(encode(&[0xff; 2], STANDARD_ALPHABET, b'='), "//8=");
-        assert_eq!(encode(&[0xff; 3], STANDARD_ALPHABET, b'='), "////");
-        assert_eq!(encode(&[0xff; 4], STANDARD_ALPHABET, b'='), "/////w==");
+        assert_eq!(encode(&[0x00], STANDARD_ALPHABET, Some(b'=')), "AA==");
+        assert_eq!(encode(&[0x00; 2], STANDARD_ALPHABET, Some(b'=')), "AAA=");
+        assert_eq!(encode(&[0x00; 3], STANDARD_ALPHABET, Some(b'=')), "AAAA");
+        assert_eq!(
+            encode(&[0x00; 6], STANDARD_ALPHABET, Some(b'=')),
+            "AAAAAAAA"
+        );
+        assert_eq!(encode(&[0xff], STANDARD_ALPHABET, Some(b'=')), "/w==");
+        assert_eq!(encode(&[0xff; 2], STANDARD_ALPHABET, Some(b'=')), "//8=");
+        assert_eq!(encode(&[0xff; 3], STANDARD_ALPHABET, Some(b'=')), "////");
+        assert_eq!(
+            encode(&[0xff; 4], STANDARD_ALPHABET, Some(b'=')),
+            "/////w=="
+        );
+    }
+
+    #[test]
+    fn encodes_all_zero_and_all_one_byte_sequences_without_padding() {
+        assert_eq!(encode(&[0x00], STANDARD_ALPHABET, None), "AA");
+        assert_eq!(encode(&[0x00; 2], STANDARD_ALPHABET, None), "AAA");
+        assert_eq!(encode(&[0x00; 3], STANDARD_ALPHABET, None), "AAAA");
+        assert_eq!(encode(&[0x00; 6], STANDARD_ALPHABET, None), "AAAAAAAA");
+        assert_eq!(encode(&[0xff], STANDARD_ALPHABET, None), "/w");
+        assert_eq!(encode(&[0xff; 2], STANDARD_ALPHABET, None), "//8");
+        assert_eq!(encode(&[0xff; 3], STANDARD_ALPHABET, None), "////");
+        assert_eq!(encode(&[0xff; 4], STANDARD_ALPHABET, None), "/////w");
     }
 
     #[test]
     fn encodes_the_full_byte_range() {
         let input: Vec<u8> = (0_u8..=255).collect();
-        let encoded = encode(&input, STANDARD_ALPHABET, b'=');
+        let encoded = encode(&input, STANDARD_ALPHABET, Some(b'='));
 
         assert!(encoded.starts_with("AAECAwQF"), "{encoded}");
         assert!(encoded.ends_with("/P3+/w=="), "{encoded}");
         assert_eq!(encoded, reference_encode(&input, STANDARD_ALPHABET, b'='));
+    }
+
+    #[test]
+    fn encodes_the_full_byte_range_without_padding() {
+        let input: Vec<u8> = (0_u8..=255).collect();
+        let encoded = encode(&input, STANDARD_ALPHABET, None);
+
+        assert!(encoded.starts_with("AAECAwQF"), "{encoded}");
+        assert!(encoded.ends_with("/P3+/w"), "{encoded}");
+        assert_eq!(
+            encoded,
+            reference_encode_without_padding(&input, STANDARD_ALPHABET)
+        );
     }
 
     #[test]
@@ -536,8 +813,27 @@ mod tests {
 
         for input in inputs {
             assert_eq!(
-                encode(input, STANDARD_ALPHABET, b'='),
+                encode(input, STANDARD_ALPHABET, Some(b'=')),
                 reference_encode(input, STANDARD_ALPHABET, b'='),
+                "binary input {input:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_sequences_that_are_not_valid_utf8_without_padding() {
+        let inputs: [&[u8]; 5] = [
+            &[0x00, 0xff, 0x00],
+            &[0xc3, 0x28],
+            &[0xed, 0xa0, 0x80],
+            &[0xfe, 0xff],
+            &[0xf0, 0x9f, 0x92, 0xa9, 0x00, 0x01, 0x80],
+        ];
+
+        for input in inputs {
+            assert_eq!(
+                encode(input, STANDARD_ALPHABET, None),
+                reference_encode_without_padding(input, STANDARD_ALPHABET),
                 "binary input {input:02x?}"
             );
         }
@@ -556,8 +852,25 @@ mod tests {
                 (DIGITS_FIRST_ALPHABET, b'*'),
             ] {
                 assert_eq!(
-                    encode(&input, alphabet, padding_symbol),
+                    encode(&input, alphabet, Some(padding_symbol)),
                     reference_encode(&input, alphabet, padding_symbol),
+                    "length {length} with alphabet {alphabet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matches_reference_encoder_for_pseudorandom_binary_input_without_padding() {
+        let mut rng = XorShift64(0x2545_f491_4f6c_dd1d);
+
+        for length in 0..=96 {
+            let input = rng.bytes(length);
+
+            for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+                assert_eq!(
+                    encode(&input, alphabet, None),
+                    reference_encode_without_padding(&input, alphabet),
                     "length {length} with alphabet {alphabet}"
                 );
             }
@@ -570,10 +883,33 @@ mod tests {
 
         for length in 0..=64 {
             let input = rng.bytes(length);
-            let encoded = encode(&input, STANDARD_ALPHABET, b'=');
+            let encoded = encode(&input, STANDARD_ALPHABET, Some(b'='));
 
             assert_eq!(
                 encoded.chars().count(),
+                calculate_encoded_length(length),
+                "length {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculated_output_length_is_an_upper_bound_without_padding() {
+        // `calculate_encoded_length` always counts whole quanta, so it overshoots
+        // an unpadded payload by exactly the number of padding symbols it would carry.
+        let mut rng = XorShift64(0x9e37_79b9_7f4a_7c15);
+
+        for length in 0..=64 {
+            let input = rng.bytes(length);
+            let encoded = encode(&input, STANDARD_ALPHABET, None);
+            let expected_padding_count = match length % 3 {
+                0 => 0,
+                1 => 2,
+                _ => 1,
+            };
+
+            assert_eq!(
+                encoded.chars().count() + expected_padding_count,
                 calculate_encoded_length(length),
                 "length {length}"
             );
@@ -630,7 +966,28 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
+                expected.as_bytes(),
+                "RFC 4648 test vector for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_rfc4648_section10_test_vectors_without_padding() {
+        let vectors = [
+            ("", ""),
+            ("Zg", "f"),
+            ("Zm8", "fo"),
+            ("Zm9v", "foo"),
+            ("Zm9vYg", "foob"),
+            ("Zm9vYmE", "fooba"),
+            ("Zm9vYmFy", "foobar"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
                 expected.as_bytes(),
                 "RFC 4648 test vector for {input:?}"
             );
@@ -647,7 +1004,24 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
+                expected,
+                "RFC 4648 illustration for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_rfc4648_section9_binary_illustrations_without_padding() {
+        let vectors: [(&str, &[u8]); 3] = [
+            ("FPucA9l+", &[0x14, 0xfb, 0x9c, 0x03, 0xd9, 0x7e]),
+            ("FPucA9k", &[0x14, 0xfb, 0x9c, 0x03, 0xd9]),
+            ("FPucAw", &[0x14, 0xfb, 0x9c, 0x03]),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
                 expected,
                 "RFC 4648 illustration for {input:?}"
             );
@@ -661,7 +1035,21 @@ mod tests {
 
         for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
             assert_eq!(
-                decode(alphabet.as_bytes(), alphabet, b'=').unwrap(),
+                decode(alphabet.as_bytes(), alphabet, Some(b'=')).unwrap(),
+                expected,
+                "alphabet {alphabet}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_every_alphabet_index_in_order_without_padding() {
+        let indices: Vec<u8> = (0..64).collect();
+        let expected = pack_six_bit_values(&indices);
+
+        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            assert_eq!(
+                decode(alphabet.as_bytes(), alphabet, None).unwrap(),
                 expected,
                 "alphabet {alphabet}"
             );
@@ -679,11 +1067,31 @@ mod tests {
 
         for (standard, url_safe, expected) in vectors {
             assert_eq!(
-                decode(standard.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(standard.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
                 expected
             );
             assert_eq!(
-                decode(url_safe.as_bytes(), URL_SAFE_ALPHABET, b'=').unwrap(),
+                decode(url_safe.as_bytes(), URL_SAFE_ALPHABET, Some(b'=')).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_the_url_safe_complementary_symbols_without_padding() {
+        let vectors: [(&str, &str, &[u8]); 3] = [
+            ("++++", "----", &[0xfb, 0xef, 0xbe]),
+            ("////", "____", &[0xff, 0xff, 0xff]),
+            ("+/+/", "-_-_", &[0xfb, 0xff, 0xbf]),
+        ];
+
+        for (standard, url_safe, expected) in vectors {
+            assert_eq!(
+                decode(standard.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
+                expected
+            );
+            assert_eq!(
+                decode(url_safe.as_bytes(), URL_SAFE_ALPHABET, None).unwrap(),
                 expected
             );
         }
@@ -700,7 +1108,25 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                decode(input.as_bytes(), DIGITS_FIRST_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), DIGITS_FIRST_ALPHABET, Some(b'=')).unwrap(),
+                expected.as_bytes(),
+                "digits-first alphabet for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_reordered_alphabet_payloads_without_padding() {
+        let vectors = [
+            ("PW", "f"),
+            ("Pcy", "fo"),
+            ("Pczl", "foo"),
+            ("PczlOc5o", "foobar"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                decode(input.as_bytes(), DIGITS_FIRST_ALPHABET, None).unwrap(),
                 expected.as_bytes(),
                 "digits-first alphabet for {input:?}"
             );
@@ -716,7 +1142,7 @@ mod tests {
                 decode(
                     format!("Zg{padding_char}{padding_char}").as_bytes(),
                     STANDARD_ALPHABET,
-                    padding_symbol
+                    Some(padding_symbol)
                 )
                 .unwrap(),
                 b"f",
@@ -726,14 +1152,14 @@ mod tests {
                 decode(
                     format!("Zm8{padding_char}").as_bytes(),
                     STANDARD_ALPHABET,
-                    padding_symbol
+                    Some(padding_symbol)
                 )
                 .unwrap(),
                 b"fo",
                 "padding {padding_char:?}"
             );
             assert_eq!(
-                decode(b"Zm9v", STANDARD_ALPHABET, padding_symbol).unwrap(),
+                decode(b"Zm9v", STANDARD_ALPHABET, Some(padding_symbol)).unwrap(),
                 b"foo",
                 "padding {padding_char:?}"
             );
@@ -749,8 +1175,25 @@ mod tests {
             "\n\n  Zm9vYmFy  \n\n",
         ] {
             assert_eq!(
-                decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
                 b"foobar",
+                "for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_leading_and_trailing_ascii_whitespace_without_padding() {
+        // Without a padding symbol every ASCII whitespace byte is trimmable, including spaces.
+        for input in [
+            " Zm9vYmE",
+            "Zm9vYmE ",
+            "\tZm9vYmE\r\n",
+            "\n\n  Zm9vYmE  \n\n",
+        ] {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
+                b"fooba",
                 "for {input:?}"
             );
         }
@@ -771,7 +1214,29 @@ mod tests {
 
         for (input, expected) in vectors {
             assert_eq!(
-                decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
+                expected,
+                "for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_all_zero_and_all_one_byte_sequences_without_padding() {
+        let vectors: [(&str, &[u8]); 8] = [
+            ("AA", &[0x00]),
+            ("AAA", &[0x00; 2]),
+            ("AAAA", &[0x00; 3]),
+            ("AAAAAAAA", &[0x00; 6]),
+            ("/w", &[0xff]),
+            ("//8", &[0xff; 2]),
+            ("////", &[0xff; 3]),
+            ("/////w", &[0xff; 4]),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
                 expected,
                 "for {input:?}"
             );
@@ -784,7 +1249,7 @@ mod tests {
         let encoded = reference_encode(&expected, STANDARD_ALPHABET, b'=');
 
         assert_eq!(
-            decode(encoded.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+            decode(encoded.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
             expected
         );
     }
@@ -803,7 +1268,28 @@ mod tests {
             let encoded = reference_encode(expected, STANDARD_ALPHABET, b'=');
 
             assert_eq!(
-                decode(encoded.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(encoded.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
+                expected,
+                "binary payload {expected:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_payloads_that_are_not_valid_utf8_without_padding() {
+        let expectations: [&[u8]; 5] = [
+            &[0x00, 0xff, 0x00],
+            &[0xc3, 0x28],
+            &[0xed, 0xa0, 0x80],
+            &[0xfe, 0xff],
+            &[0xf0, 0x9f, 0x92, 0xa9, 0x00, 0x01, 0x80],
+        ];
+
+        for expected in expectations {
+            let encoded = reference_encode_without_padding(expected, STANDARD_ALPHABET);
+
+            assert_eq!(
+                decode(encoded.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
                 expected,
                 "binary payload {expected:02x?}"
             );
@@ -822,12 +1308,66 @@ mod tests {
                 (URL_SAFE_ALPHABET, b'.'),
                 (DIGITS_FIRST_ALPHABET, b'*'),
             ] {
-                let encoded = encode(&input, alphabet, padding_symbol);
+                let encoded = encode(&input, alphabet, Some(padding_symbol));
 
                 assert_eq!(
-                    decode(encoded.as_bytes(), alphabet, padding_symbol).unwrap(),
+                    decode(encoded.as_bytes(), alphabet, Some(padding_symbol)).unwrap(),
                     input,
                     "length {length} with alphabet {alphabet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round_trips_pseudorandom_binary_input_without_padding() {
+        let mut rng = XorShift64(0x1234_5678_9abc_def0);
+
+        for length in 0..=96 {
+            let input = rng.bytes(length);
+
+            for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+                let encoded = encode(&input, alphabet, None);
+
+                assert_eq!(
+                    decode(encoded.as_bytes(), alphabet, None).unwrap(),
+                    input,
+                    "length {length} with alphabet {alphabet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round_trips_every_input_length_in_both_padding_modes() {
+        // `source == decode(encode(source))` must hold for every tail shape and every alphabet.
+        let mut rng = XorShift64(0xf00d_face_b00c_1234);
+
+        for length in 0..=48 {
+            let input = rng.bytes(length);
+
+            for (alphabet, padding_symbol) in [
+                (STANDARD_ALPHABET, b'='),
+                (URL_SAFE_ALPHABET, b'.'),
+                (DIGITS_FIRST_ALPHABET, b'*'),
+            ] {
+                let padded = encode(&input, alphabet, Some(padding_symbol));
+                let unpadded = encode(&input, alphabet, None);
+
+                assert_eq!(
+                    decode(padded.as_bytes(), alphabet, Some(padding_symbol)).unwrap(),
+                    input,
+                    "padded round trip of length {length} with alphabet {alphabet}"
+                );
+                assert_eq!(
+                    decode(unpadded.as_bytes(), alphabet, None).unwrap(),
+                    input,
+                    "unpadded round trip of length {length} with alphabet {alphabet}"
+                );
+                assert_eq!(
+                    unpadded,
+                    padded.trim_end_matches(padding_symbol as char),
+                    "both modes must emit the same data symbols for length {length}"
                 );
             }
         }
@@ -851,7 +1391,7 @@ mod tests {
                     .expect("reference engine must decode its own output");
 
                 assert_eq!(
-                    decode(encoded.as_bytes(), alphabet, padding_symbol).unwrap(),
+                    decode(encoded.as_bytes(), alphabet, Some(padding_symbol)).unwrap(),
                     expected,
                     "length {length} with alphabet {alphabet}"
                 );
@@ -860,12 +1400,57 @@ mod tests {
     }
 
     #[test]
+    fn matches_reference_decoder_for_pseudorandom_payloads_without_padding() {
+        let mut rng = XorShift64(0x0123_4567_89ab_cdef);
+
+        for length in 0..=96 {
+            let input = rng.bytes(length);
+
+            for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+                let encoded = reference_encode_without_padding(&input, alphabet);
+
+                assert_eq!(
+                    decode(encoded.as_bytes(), alphabet, None).unwrap(),
+                    input,
+                    "length {length} with alphabet {alphabet}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_unaligned_input_length_when_padding_is_disabled() {
+        // The alignment guard is skipped, so 2- and 3-symbol final quanta are valid input.
+        let vectors: [(&str, &[u8]); 6] = [
+            ("Zg", b"f"),
+            ("Zm8", b"fo"),
+            ("Zm9vYg", b"foob"),
+            ("Zm9vYmE", b"fooba"),
+            ("Zm9vYmFyZg", b"foobarf"),
+            ("Zm9vYmFyZm8", b"foobarfo"),
+        ];
+
+        for (input, expected) in vectors {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
+                expected,
+                "for {input:?}"
+            );
+        }
+    }
+
+    #[test]
     fn returns_err_when_input_length_is_not_a_multiple_of_four() {
         for input in ["Z", "Zm", "Zm9", "Zm9vY", "Zm9vYm", "Zm9vYmF", "Zm9vYmFy="] {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            let input_length = input.len();
 
             assert!(
-                error.contains("unexpected tail bytes"),
+                error.contains(&format!(
+                    "its length must be aligned to the decoding block size of 4 bytes, \
+                     but the actual length is {input_length} bytes"
+                )),
                 "unexpected error for {input:?}: {error}"
             );
         }
@@ -873,12 +1458,159 @@ mod tests {
 
     #[test]
     fn returns_err_when_input_length_is_not_a_multiple_of_four_after_trimming() {
-        let error = decode(b"  Zm9  ", STANDARD_ALPHABET, b'=').unwrap_err();
+        let input = "  Zm9  ";
+        let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+        let trimmed_input_length = input.trim().len();
 
         assert!(
-            error.contains("unexpected tail bytes detected in the end: 'Zm9'"),
+            error.contains(&format!(
+                "its length must be aligned to the decoding block size of 4 bytes, \
+                 but the actual length is {trimmed_input_length} bytes"
+            )),
+            "unexpected error for {input:?}: {error}"
+        );
+    }
+
+    #[test]
+    fn does_not_check_input_length_alignment_when_padding_is_disabled() {
+        for input in ["Zg", "Zm8", "Zm9vYg", "Zm9vYmE"] {
+            assert!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).is_ok(),
+                "unaligned input {input:?} must be accepted"
+            );
+            assert!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).is_err(),
+                "unaligned input {input:?} must be rejected when padding is required"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_err_when_the_final_quantum_holds_a_single_symbol_and_padding_is_disabled() {
+        // A lone symbol carries 6 bits, which is not enough to reconstruct a source byte.
+        for input in ["Z", "Zm9vY", "Zm9vYmFyZ"] {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains("meaningful tail can't be shorter than 2 symbols, but found 1"),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_err_when_the_final_quantum_holds_a_single_symbol_and_padding_is_enabled() {
+        // The same shape stays aligned to the block size, so it is spelled with 3 padding symbols.
+        // The padding counter guards this case before the tail length is ever inspected.
+        for input in ["Z===", "Zm9vY===", "Zm9vYmFyZ==="] {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            assert!(
+                error.contains("not more than 2 padding symbols is expected, but 3 found"),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_tail_errors_before_body_errors() {
+        // The tail starts at offset 68, so a tail error always quotes position 69 or later.
+        let expectations = [
+            (
+                "Z===",
+                "not more than 2 padding symbols is expected, but 3 found",
+            ),
+            ("Z!==", "invalid symbol '!' (position: 70)"),
+            (
+                "Zh==",
+                "non-zero padding bits detected in input payload: 'h' (position: 70)",
+            ),
+        ];
+
+        for (tail, expected_error) in expectations {
+            let input = payload_with_malformed_body(tail);
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            assert!(
+                error.contains(expected_error),
+                "unexpected error for tail {tail:?}: {error}"
+            );
+            assert!(
+                !error.contains("(position: 1)"),
+                "the body error must not win for tail {tail:?}: {error}"
+            );
+        }
+
+        // Same body, well-formed tail: now the body error is the one that surfaces.
+        let input = payload_with_malformed_body("Zg==");
+        let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+        assert!(
+            error.contains("invalid symbol '!' (position: 1)"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn reports_tail_errors_before_body_errors_when_padding_is_disabled() {
+        let expectations = [
+            (
+                "Z",
+                "meaningful tail can't be shorter than 2 symbols, but found 1",
+            ),
+            ("Z!", "invalid symbol '!' (position: 70)"),
+            (
+                "Zh",
+                "non-zero padding bits detected in input payload: 'h' (position: 70)",
+            ),
+            // Padding symbols are foreign to the alphabet once `--no-pad` is active.
+            ("Zg==", "invalid symbol '=' (position: 71)"),
+        ];
+
+        for (tail, expected_error) in expectations {
+            let input = payload_with_malformed_body(tail);
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains(expected_error),
+                "unexpected error for tail {tail:?}: {error}"
+            );
+            assert!(
+                !error.contains("(position: 1)"),
+                "the body error must not win for tail {tail:?}: {error}"
+            );
+        }
+
+        let input = payload_with_malformed_body("Zg");
+        let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+        assert!(
+            error.contains("invalid symbol '!' (position: 1)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn returns_err_when_padding_symbols_are_present_and_padding_is_disabled() {
+        // With `--no-pad` the padding symbol is simply not part of the alphabet any more.
+        let expectations = [
+            ("Zg==", '=', 3),
+            ("Zm8=", '=', 4),
+            ("Zm9vYg==", '=', 7),
+            ("Zm9vYmE=", '=', 8),
+        ];
+
+        for (input, expected_symbol, expected_position) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "invalid symbol '{expected_symbol}' (position: {expected_position})"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -892,12 +1624,29 @@ mod tests {
         ];
 
         for (input, expected_symbol, expected_position) in expectations {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
 
             assert!(
-                error.contains("invalid symbol detected in input payload"),
+                error.contains(&format!(
+                    "invalid symbol '{expected_symbol}' (position: {expected_position})"
+                )),
                 "unexpected error for {input:?}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn returns_err_when_a_body_quantum_contains_a_symbol_outside_the_alphabet_without_padding() {
+        let expectations = [
+            ("!m9vYmFy", '!', 1),
+            ("Zm=vYmFy", '=', 3),
+            ("Zm9v!m9vYmFy", '!', 5),
+            ("Zm9v!m9vYA", '!', 5),
+        ];
+
+        for (input, expected_symbol, expected_position) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
             assert!(
                 error.contains(&format!(
                     "'{expected_symbol}' (position: {expected_position})"
@@ -918,7 +1667,28 @@ mod tests {
         ];
 
         for (input, expected_symbol, expected_position) in expectations {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "'{expected_symbol}' (position: {expected_position})"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn returns_err_when_the_final_quantum_contains_a_symbol_outside_the_alphabet_without_padding() {
+        let expectations = [
+            ("Zm9v!mFy", '!', 5),
+            ("Zm9vYm!y", '!', 7),
+            ("Zm9v!m", '!', 5),
+            ("Z!", '!', 2),
+        ];
+
+        for (input, expected_symbol, expected_position) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
 
             assert!(
                 error.contains(&format!(
@@ -933,10 +1703,10 @@ mod tests {
     fn returns_err_when_padding_appears_before_the_final_quantum() {
         // Concatenated padded payloads are not a single valid encoding.
         for input in ["Zg==Zg==", "Zm8=Zm9v", "====Zm9v"] {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
 
             assert!(
-                error.contains("invalid symbol detected in input payload"),
+                error.contains("invalid symbol '='"),
                 "unexpected error for {input:?}: {error}"
             );
         }
@@ -944,11 +1714,28 @@ mod tests {
 
     #[test]
     fn returns_err_when_more_than_two_padding_symbols_are_present() {
-        for input in ["Z===", "====", "Zm9vY===", "Zm9v===="] {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+        let expectations = [("Z===", 3), ("====", 4), ("Zm9vY===", 3), ("Zm9v====", 4)];
+
+        for (input, expected_count) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
 
             assert!(
-                error.contains("more than 2 padding symbols detected"),
+                error.contains(&format!(
+                    "not more than 2 padding symbols is expected, but {expected_count} found"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_count_padding_symbols_when_padding_is_disabled() {
+        // The "more than 2 padding symbols" guard is unreachable: they are invalid symbols instead.
+        for input in ["Z===", "====", "Zm9vY===", "Zm9v===="] {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains("invalid symbol '='"),
                 "unexpected error for {input:?}: {error}"
             );
         }
@@ -962,7 +1749,7 @@ mod tests {
             let symbol = STANDARD_ALPHABET.as_bytes()[index] as char;
             let input = format!("Z{symbol}==");
 
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
 
             assert!(
                 error.contains(&format!(
@@ -972,7 +1759,31 @@ mod tests {
             );
         }
 
-        assert_eq!(decode(b"Zg==", STANDARD_ALPHABET, b'=').unwrap(), b"f");
+        assert_eq!(
+            decode(b"Zg==", STANDARD_ALPHABET, Some(b'=')).unwrap(),
+            b"f"
+        );
+    }
+
+    #[test]
+    fn returns_err_when_a_two_symbol_quantum_has_non_zero_pad_bits_without_padding() {
+        // RFC 4648 section 3.5 applies to unpadded payloads too: "Zg" is the only spelling of "f".
+        // indices 33..=47 carry the same data byte plus dirty pad bits.
+        for index in 33_usize..=47 {
+            let symbol = STANDARD_ALPHABET.as_bytes()[index] as char;
+            let input = format!("Z{symbol}");
+
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "non-zero padding bits detected in input payload: '{symbol}' (position: 2)"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+
+        assert_eq!(decode(b"Zg", STANDARD_ALPHABET, None).unwrap(), b"f");
     }
 
     #[test]
@@ -982,7 +1793,7 @@ mod tests {
             let symbol = STANDARD_ALPHABET.as_bytes()[index] as char;
             let input = format!("Zm{symbol}=");
 
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
 
             assert!(
                 error.contains(&format!(
@@ -992,7 +1803,29 @@ mod tests {
             );
         }
 
-        assert_eq!(decode(b"Zm8=", STANDARD_ALPHABET, b'=').unwrap(), b"fo");
+        assert_eq!(
+            decode(b"Zm8=", STANDARD_ALPHABET, Some(b'=')).unwrap(),
+            b"fo"
+        );
+    }
+
+    #[test]
+    fn returns_err_when_a_three_symbol_quantum_has_non_zero_pad_bits_without_padding() {
+        for index in 61_usize..=63 {
+            let symbol = STANDARD_ALPHABET.as_bytes()[index] as char;
+            let input = format!("Zm{symbol}");
+
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "non-zero padding bits detected in input payload: '{symbol}' (position: 3)"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+        }
+
+        assert_eq!(decode(b"Zm8", STANDARD_ALPHABET, None).unwrap(), b"fo");
     }
 
     #[test]
@@ -1003,7 +1836,7 @@ mod tests {
             // Two data symbols leave four pad bits.
             let two_symbol_quantum = format!("A{symbol}==");
             assert_eq!(
-                decode(two_symbol_quantum.as_bytes(), STANDARD_ALPHABET, b'=').is_ok(),
+                decode(two_symbol_quantum.as_bytes(), STANDARD_ALPHABET, Some(b'=')).is_ok(),
                 index % 16 == 0,
                 "for {two_symbol_quantum:?}"
             );
@@ -1011,7 +1844,12 @@ mod tests {
             // Three data symbols leave two pad bits.
             let three_symbol_quantum = format!("AA{symbol}=");
             assert_eq!(
-                decode(three_symbol_quantum.as_bytes(), STANDARD_ALPHABET, b'=').is_ok(),
+                decode(
+                    three_symbol_quantum.as_bytes(),
+                    STANDARD_ALPHABET,
+                    Some(b'=')
+                )
+                .is_ok(),
                 index % 4 == 0,
                 "for {three_symbol_quantum:?}"
             );
@@ -1019,7 +1857,37 @@ mod tests {
             // A full quantum has no pad bits, so every symbol is canonical.
             let full_quantum = format!("AAA{symbol}");
             assert!(
-                decode(full_quantum.as_bytes(), STANDARD_ALPHABET, b'=').is_ok(),
+                decode(full_quantum.as_bytes(), STANDARD_ALPHABET, Some(b'=')).is_ok(),
+                "for {full_quantum:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_a_final_symbol_only_when_its_pad_bits_are_zero_without_padding() {
+        for (index, &symbol) in STANDARD_ALPHABET.as_bytes().iter().enumerate() {
+            let symbol = symbol as char;
+
+            // Two data symbols leave four pad bits.
+            let two_symbol_quantum = format!("A{symbol}");
+            assert_eq!(
+                decode(two_symbol_quantum.as_bytes(), STANDARD_ALPHABET, None).is_ok(),
+                index % 16 == 0,
+                "for {two_symbol_quantum:?}"
+            );
+
+            // Three data symbols leave two pad bits.
+            let three_symbol_quantum = format!("AA{symbol}");
+            assert_eq!(
+                decode(three_symbol_quantum.as_bytes(), STANDARD_ALPHABET, None).is_ok(),
+                index % 4 == 0,
+                "for {three_symbol_quantum:?}"
+            );
+
+            // A full quantum has no pad bits, so every symbol is canonical.
+            let full_quantum = format!("AAA{symbol}");
+            assert!(
+                decode(full_quantum.as_bytes(), STANDARD_ALPHABET, None).is_ok(),
                 "for {full_quantum:?}"
             );
         }
@@ -1034,7 +1902,7 @@ mod tests {
 
             for quantum in [format!("A{symbol}=="), format!("AA{symbol}=")] {
                 assert_eq!(
-                    decode(quantum.as_bytes(), STANDARD_ALPHABET, b'=').is_ok(),
+                    decode(quantum.as_bytes(), STANDARD_ALPHABET, Some(b'=')).is_ok(),
                     engine.decode(&quantum).is_ok(),
                     "for {quantum:?}"
                 );
@@ -1050,7 +1918,7 @@ mod tests {
             let first_symbol = alphabet.as_bytes()[0] as char;
             let input = format!("{first_symbol}{symbol}==");
 
-            let error = decode(input.as_bytes(), alphabet, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), alphabet, Some(b'=')).unwrap_err();
 
             assert!(
                 error.contains("non-zero padding bits"),
@@ -1064,7 +1932,44 @@ mod tests {
         let expectations = [("  Zm9vZh==", 'h', 8), ("\r\n\tZm9vZm9=\r\n", '9', 10)];
 
         for (input, expected_symbol, expected_position) in expectations {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "'{expected_symbol}' (position: {expected_position})"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+            assert_eq!(
+                input.as_bytes()[expected_position - 1] as char,
+                expected_symbol,
+                "test vector {input:?} must point at the offending byte"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_zero_pad_bits_for_every_alphabet_without_padding() {
+        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            let symbol = alphabet.as_bytes()[33] as char;
+            let first_symbol = alphabet.as_bytes()[0] as char;
+            let input = format!("{first_symbol}{symbol}");
+
+            let error = decode(input.as_bytes(), alphabet, None).unwrap_err();
+
+            assert!(
+                error.contains("non-zero padding bits"),
+                "unexpected error for {input:?} with {alphabet}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_non_zero_pad_bit_positions_relative_to_the_original_input_without_padding() {
+        let expectations = [("  Zm9vZh", 'h', 8), ("\r\n\tZm9vZm9\r\n", '9', 10)];
+
+        for (input, expected_symbol, expected_position) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
 
             assert!(
                 error.contains(&format!(
@@ -1084,12 +1989,12 @@ mod tests {
     fn calculates_decoded_length_for_known_inputs() {
         let expectations = [
             (0, 0),
-            (1, 0),
-            (2, 0),
-            (3, 0),
+            (1, 3),
+            (2, 3),
+            (3, 3),
             (4, 3),
-            (5, 3),
-            (7, 3),
+            (5, 6),
+            (7, 6),
             (8, 6),
             (12, 9),
             (400, 300),
@@ -1106,11 +2011,46 @@ mod tests {
     }
 
     #[test]
-    fn calculates_decoded_length_as_whole_quanta_count() {
+    fn calculates_decoded_length_as_rounded_up_quanta_count() {
+        // A partial quantum still produces output, so it has to be counted as a whole one.
         for encoded_length in 0..=1_000_usize {
             assert_eq!(
                 calculate_decoded_length(encoded_length),
-                (encoded_length / 4) * 3,
+                encoded_length.div_ceil(4) * 3,
+                "for encoded length {encoded_length}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculates_decoded_length_without_losing_precision_on_large_payloads() {
+        // An `f32` stops representing consecutive integers exactly at 2^24, which would make
+        // the estimate undershoot for payloads larger than ~16 MB.
+        let boundaries = [
+            16_777_215_usize,
+            16_777_216,
+            16_777_217,
+            16_777_219,
+            33_554_433,
+            1_000_000_001,
+            4_294_967_293,
+        ];
+
+        for encoded_length in boundaries {
+            assert_eq!(
+                calculate_decoded_length(encoded_length),
+                encoded_length.div_ceil(4) * 3,
+                "for encoded length {encoded_length}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_length_is_an_upper_bound_of_any_payload_size() {
+        // Six bits per symbol is the theoretical maximum any payload can decode to.
+        for encoded_length in 0..=1_000_usize {
+            assert!(
+                calculate_decoded_length(encoded_length) >= (encoded_length * 6) / 8,
                 "for encoded length {encoded_length}"
             );
         }
@@ -1122,11 +2062,29 @@ mod tests {
 
         for length in 0..=64 {
             let input = rng.bytes(length);
-            let encoded = encode(&input, STANDARD_ALPHABET, b'=');
-            let decoded = decode(encoded.as_bytes(), STANDARD_ALPHABET, b'=').unwrap();
+            let encoded = encode(&input, STANDARD_ALPHABET, Some(b'='));
+            let decoded = decode(encoded.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap();
             let estimate = calculate_decoded_length(encoded.len());
 
             assert_eq!(decoded.len(), length, "length {length}");
+            assert!(
+                estimate >= length && estimate - length <= 2,
+                "estimate {estimate} must overshoot length {length} by at most 2"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_unpadded_payloads_to_their_original_length() {
+        let mut rng = XorShift64(0xdead_beef_cafe_f00d);
+
+        for length in 0..=64 {
+            let input = rng.bytes(length);
+            let encoded = encode(&input, STANDARD_ALPHABET, None);
+            let decoded = decode(encoded.as_bytes(), STANDARD_ALPHABET, None).unwrap();
+            let estimate = calculate_decoded_length(encoded.len());
+
+            assert_eq!(decoded, input, "length {length}");
             assert!(
                 estimate >= length && estimate - length <= 2,
                 "estimate {estimate} must overshoot length {length} by at most 2"
@@ -1172,7 +2130,18 @@ mod tests {
     fn decodes_empty_input_to_empty_output() {
         for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
             assert_eq!(
-                decode(&[], alphabet, b'=').unwrap(),
+                decode(&[], alphabet, Some(b'=')).unwrap(),
+                Vec::<u8>::new(),
+                "alphabet {alphabet}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_empty_input_to_empty_output_without_padding() {
+        for alphabet in [STANDARD_ALPHABET, URL_SAFE_ALPHABET, DIGITS_FIRST_ALPHABET] {
+            assert_eq!(
+                decode(&[], alphabet, None).unwrap(),
                 Vec::<u8>::new(),
                 "alphabet {alphabet}"
             );
@@ -1183,7 +2152,18 @@ mod tests {
     fn decodes_whitespace_only_input_to_empty_output() {
         for input in [" ", "\n", "  \r\n\t ", "\u{c}\u{c}"] {
             assert_eq!(
-                decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap(),
+                decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap(),
+                Vec::<u8>::new(),
+                "for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_whitespace_only_input_to_empty_output_without_padding() {
+        for input in [" ", "\n", "  \r\n\t ", "\u{c}\u{c}"] {
+            assert_eq!(
+                decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap(),
                 Vec::<u8>::new(),
                 "for {input:?}"
             );
@@ -1193,10 +2173,16 @@ mod tests {
     #[test]
     fn honours_whitespace_padding_symbols() {
         // `validate_padding_symbol` accepts 0x20, so the engine must accept it too.
-        assert_eq!(decode(b"Zg  ", STANDARD_ALPHABET, b' ').unwrap(), b"f");
-        assert_eq!(decode(b"Zm8 ", STANDARD_ALPHABET, b' ').unwrap(), b"fo");
         assert_eq!(
-            decode(b"\r\nZm9vYmE \r\n", STANDARD_ALPHABET, b' ').unwrap(),
+            decode(b"Zg  ", STANDARD_ALPHABET, Some(b' ')).unwrap(),
+            b"f"
+        );
+        assert_eq!(
+            decode(b"Zm8 ", STANDARD_ALPHABET, Some(b' ')).unwrap(),
+            b"fo"
+        );
+        assert_eq!(
+            decode(b"\r\nZm9vYmE \r\n", STANDARD_ALPHABET, Some(b' ')).unwrap(),
             b"fooba"
         );
     }
@@ -1216,7 +2202,37 @@ mod tests {
         ];
 
         for (input, expected_symbol, expected_position) in expectations {
-            let error = decode(input.as_bytes(), STANDARD_ALPHABET, b'=').unwrap_err();
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, Some(b'=')).unwrap_err();
+
+            assert!(
+                error.contains(&format!(
+                    "'{expected_symbol}' (position: {expected_position})"
+                )),
+                "unexpected error for {input:?}: {error}"
+            );
+            assert_eq!(
+                input.as_bytes()[expected_position - 1] as char,
+                expected_symbol,
+                "test vector {input:?} must point at the offending byte"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_invalid_symbol_positions_relative_to_the_original_input_without_padding() {
+        let expectations = [
+            // Invalid symbol inside a body quantum.
+            ("  !m9vYmFy", '!', 3),
+            ("\n\n\nZm9v!m9vYmFy", '!', 8),
+            // Invalid symbol inside the final quantum.
+            ("  Zm9v!mFy", '!', 7),
+            ("\t\tZm9vYm!y", '!', 9),
+            ("   Z!", '!', 5),
+            ("\r\n Zm9vY=g\r\n", '=', 9),
+        ];
+
+        for (input, expected_symbol, expected_position) in expectations {
+            let error = decode(input.as_bytes(), STANDARD_ALPHABET, None).unwrap_err();
 
             assert!(
                 error.contains(&format!(
@@ -1238,7 +2254,7 @@ mod tests {
             let input = [whitespace, whitespace, b'Z', b'g', b'=', b'=', whitespace];
 
             assert_eq!(
-                trim_whitespaces(&input, b'='),
+                trim_whitespaces(&input, Some(b'=')),
                 (b"Zg==".as_slice(), 2),
                 "whitespace {whitespace:#04x}"
             );
@@ -1249,7 +2265,7 @@ mod tests {
     fn keeps_payloads_without_surrounding_whitespace_untouched() {
         for input in [b"Zm9vYmFy".as_slice(), b"Zg==", b"Z"] {
             assert_eq!(
-                trim_whitespaces(input, b'='),
+                trim_whitespaces(input, Some(b'=')),
                 (input, 0),
                 "for {input:02x?}"
             );
@@ -1259,18 +2275,18 @@ mod tests {
     #[test]
     fn keeps_whitespace_inside_the_payload() {
         assert_eq!(
-            trim_whitespaces(b" Zm9v YmFy ", b'='),
+            trim_whitespaces(b" Zm9v YmFy ", Some(b'=')),
             (b"Zm9v YmFy".as_slice(), 1)
         );
     }
 
     #[test]
     fn returns_an_empty_slice_for_empty_and_whitespace_only_input() {
-        assert_eq!(trim_whitespaces(b"", b'='), (b"".as_slice(), 0));
+        assert_eq!(trim_whitespaces(b"", Some(b'=')), (b"".as_slice(), 0));
 
         for input in [b" ".as_slice(), b"\n", b"  \r\n\t "] {
             assert_eq!(
-                trim_whitespaces(input, b'='),
+                trim_whitespaces(input, Some(b'=')),
                 (b"".as_slice(), input.len()),
                 "for {input:02x?}"
             );
@@ -1279,28 +2295,34 @@ mod tests {
 
     #[test]
     fn keeps_spaces_when_space_is_the_padding_symbol() {
-        assert_eq!(trim_whitespaces(b"Zg  ", b' '), (b"Zg  ".as_slice(), 0));
         assert_eq!(
-            trim_whitespaces(b"\r\nZm8 \r\n", b' '),
+            trim_whitespaces(b"Zg  ", Some(b' ')),
+            (b"Zg  ".as_slice(), 0)
+        );
+        assert_eq!(
+            trim_whitespaces(b"\r\nZm8 \r\n", Some(b' ')),
             (b"Zm8 ".as_slice(), 2)
         );
         // A space-padded payload is no longer trimmable from the start.
-        assert_eq!(trim_whitespaces(b" Zg  ", b' '), (b" Zg  ".as_slice(), 0));
+        assert_eq!(
+            trim_whitespaces(b" Zg  ", Some(b' ')),
+            (b" Zg  ".as_slice(), 0)
+        );
         // First occurrence of the padding symbol will stop trimming.
         assert_eq!(
-            trim_whitespaces(b"\t\n  Zg  ", b' '),
+            trim_whitespaces(b"\t\n  Zg  ", Some(b' ')),
             (b"  Zg  ".as_slice(), 2)
         );
         assert_eq!(
-            trim_whitespaces(b" \t\n  Zg  ", b' '),
+            trim_whitespaces(b" \t\n  Zg  ", Some(b' ')),
             (b" \t\n  Zg  ".as_slice(), 0)
         );
         assert_eq!(
-            trim_whitespaces(b" Zg  \n\t", b' '),
+            trim_whitespaces(b" Zg  \n\t", Some(b' ')),
             (b" Zg  ".as_slice(), 0)
         );
         assert_eq!(
-            trim_whitespaces(b" Zg  \n\t ", b' '),
+            trim_whitespaces(b" Zg  \n\t ", Some(b' ')),
             (b" Zg  \n\t ".as_slice(), 0)
         );
     }
@@ -1311,7 +2333,7 @@ mod tests {
             let input = [symbol, b'Z', b'g', b'=', b'=', symbol];
 
             assert_eq!(
-                trim_whitespaces(&input, b'='),
+                trim_whitespaces(&input, Some(b'=')),
                 (input.as_slice(), 0),
                 "symbol {symbol:#04x}"
             );
@@ -1334,13 +2356,66 @@ mod tests {
         ];
 
         for payload in payloads {
-            let (trimmed, trimmed_from_start) = trim_whitespaces(payload, b'=');
+            let (trimmed, trimmed_from_start) = trim_whitespaces(payload, Some(b'='));
 
             assert_eq!(trimmed, payload.trim_ascii(), "for {payload:02x?}");
             assert_eq!(
                 trimmed_from_start,
                 payload.len() - payload.trim_ascii_start().len(),
                 "offset for {payload:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_trim_ascii_when_padding_is_disabled() {
+        // No padding symbol means nothing has to survive trimming, spaces included.
+        let payloads: [&[u8]; 9] = [
+            b"",
+            b"   ",
+            b"\t\n\x0c\r ",
+            b"Zm9vYmFy",
+            b" Zm9vYmFy ",
+            b"\r\n\tZm9vYmFy\x0c ",
+            b"Zm9v YmFy",
+            b"\0Zm9vYmFy\0",
+            b" Zg  ",
+        ];
+
+        for payload in payloads {
+            let (trimmed, trimmed_from_start) = trim_whitespaces(payload, None);
+
+            assert_eq!(trimmed, payload.trim_ascii(), "for {payload:02x?}");
+            assert_eq!(
+                trimmed_from_start,
+                payload.len() - payload.trim_ascii_start().len(),
+                "offset for {payload:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trims_spaces_when_padding_is_disabled() {
+        // Mirror image of `keeps_spaces_when_space_is_the_padding_symbol`.
+        assert_eq!(trim_whitespaces(b"Zg  ", None), (b"Zg".as_slice(), 0));
+        assert_eq!(
+            trim_whitespaces(b"\r\nZm8 \r\n", None),
+            (b"Zm8".as_slice(), 2)
+        );
+        assert_eq!(trim_whitespaces(b" Zg  ", None), (b"Zg".as_slice(), 1));
+        assert_eq!(trim_whitespaces(b"\t\n  Zg  ", None), (b"Zg".as_slice(), 4));
+        assert_eq!(trim_whitespaces(b" Zg  \n\t ", None), (b"Zg".as_slice(), 1));
+    }
+
+    #[test]
+    fn does_not_trim_control_characters_that_are_not_ascii_whitespace_when_padding_is_disabled() {
+        for symbol in [0x00_u8, 0x0b, 0x1f, 0x7f] {
+            let input = [symbol, b'Z', b'g', symbol];
+
+            assert_eq!(
+                trim_whitespaces(&input, None),
+                (input.as_slice(), 0),
+                "symbol {symbol:#04x}"
             );
         }
     }

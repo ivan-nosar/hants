@@ -53,7 +53,7 @@ pub fn write_output_bytes(target: IoTarget, content: &[u8]) -> Result<(), String
                 );
 
                 println!("{}", result)
-            },
+            }
             Cow::Borrowed(result) => println!("{}", result),
         },
         IoTarget::Clipboard => {

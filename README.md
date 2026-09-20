@@ -151,14 +151,17 @@ Options:
                               File must exist prior to command execution
            [default: clipboard]
   -a, --alphabet <ALPHABET>
-          Use custom alphabet. Must be a string consisting of exactly 
-          64 unique symbols. If not provided - default alphabet is used: 
+          Use custom alphabet. Must be a string consisting of exactly
+          64 unique symbols. If not provided - default alphabet is used:
           ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
   -c, --complementary-symbols <COMPLEMENTARY_SYMBOLS>
-          Use symbols provided as a replacement for default complementary symbols 
+          Use symbols provided as a replacement for default complementary symbols
           (63th and 64th character in alphabet: +/).
   -p, --padding-symbol <PADDING_SYMBOL>
           Use symbol provided as padding character. [default: =]
+  -n, --no-pad
+          Disable padding. When encoding, no trailing padding symbols
+          are emitted; when decoding, the input is expected to carry none.
   -h, --help
           Print help
 ```
@@ -172,17 +175,45 @@ $ hants base64 encode -i cb -o c
 Zm9vYmFy
 ```
 
-1. Read input from a file and print the result to the console:
+2. Read input from a file and print the result to the console:
 ```sh
 # Assuming './input.txt' exists and contains the "foobar" text
 $ hants base64 encode -i ./input.txt -o c
 Zm9vYmFy
 ```
 
-1. Read input from `STDIN` and print the result to the console:
+3. Read input from `STDIN` and print the result to the console:
 ```sh
 $ "foobar" | hants base64 encode -i c -o c
 Zm9vYmFy
+```
+
+4. Use a custom alphabet; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "foobar" text
+$ hants base64 encode -a 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/ -o c
+PczlOc5o
+```
+
+5. Replace the default complementary symbols; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "ÿÿÿ" text
+$ hants base64 encode -c -_ -o c
+w7_Dv8O_
+```
+
+6. Encode with a custom padding symbol; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "foob" text
+$ hants base64 encode -p _ -o c
+Zm9vYg__
+```
+
+7. Encode without padding; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "foob" text
+$ hants base64 encode -n -o c
+Zm9vYg
 ```
 
 #### Decode
@@ -212,26 +243,44 @@ Options:
                               File must exist prior to command execution
            [default: clipboard]
   -a, --alphabet <ALPHABET>
-          Use custom alphabet. Must be a string consisting of exactly 
-          64 unique symbols. If not provided - default alphabet is used: 
+          Use custom alphabet. Must be a string consisting of exactly
+          64 unique symbols. If not provided - default alphabet is used:
           ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
   -c, --complementary-symbols <COMPLEMENTARY_SYMBOLS>
-          Use symbols provided as a replacement for default complementary symbols 
+          Use symbols provided as a replacement for default complementary symbols
           (63th and 64th character in alphabet: +/).
   -p, --padding-symbol <PADDING_SYMBOL>
           Use symbol provided as padding character. [default: =]
+  -n, --no-pad
+          Disable padding. When encoding, no trailing padding symbols
+          are emitted; when decoding, the input is expected to carry none.
   -h, --help
           Print help
 ```
 
+> [!TIP]
+> Decoding parameters must match the ones the payload was encoded with: `hants` relies entirely on
+> what is passed on the command line and never tries to infer them from the payload itself.
+>
+> If the input was produced with a custom alphabet or a custom padding symbol, pass the same `-a`,
+> `-c` or `-p` value to `base64 decode`. If the input carries no padding at all - a common case for
+> data transferred over a network - `-n` is mandatory. Mismatched parameters lead either to an
+> explicit error or, in some cases, to a silently asymmetric result.
+>
+> For instance, `base64 encode -p ' '` produces a payload padded with spaces, which is then
+> ambiguous to decode: both `base64 decode -p ' '` and `base64 decode -n` accept it, because the
+> decoder trims surrounding whitespace before processing. Omitting the padding-related arguments
+> altogether, on the other hand, makes `hants` reject the payload with the block size alignment
+> error described below.
+
 > [!IMPORTANT]
-> Currently, the `base64 decode` command does not support unaligned or non-padded payloads. If the
-> length of the input sequence is not aligned to the decoding block size - 4 bytes - `hants` cannot
-> process such a payload and reports an error:
+> Without the `-n` flag, the `base64 decode` command does not accept unaligned or non-padded
+> payloads. If the length of the input sequence is not aligned to the decoding block size - 4
+> bytes - `hants` cannot process such a payload and reports an error:
 > ```sh
 > # Assuming the clipboard contains the "Zm9" text - an incomplete Base64 sequence.
 > $ hants base64 decode -i cb -o c
-> Error: input payload is malformed: unexpected tail bytes detected in the end: 'Zm9'
+> Error: input payload is malformed: its length must be aligned to the decoding block size of 4 bytes, but the actual length is 3 bytes.
 > ```
 
 > [!TIP]
@@ -274,6 +323,34 @@ foobar
 
 echo " \tZm9vYmFy\n \r" | hants base64 decode -i c -o c
 foobar
+```
+
+4. Use a custom alphabet; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "PczlOc5o" text
+$ hants base64 decode -a 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/ -o c
+foobar
+```
+
+5. Replace the default complementary symbols; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "w7_Dv8O_" text
+$ hants base64 decode -c -_ -o c
+ÿÿÿ
+```
+
+6. Decode a payload padded with a custom symbol; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "Zm9vYg__" text
+$ hants base64 decode -p _ -o c
+foob
+```
+
+7. Decode a payload without padding; the input is implicitly read from the clipboard:
+```sh
+# Assuming the clipboard contains the "Zm9vYg" text
+$ hants base64 decode -n -o c
+foob
 ```
 
 > [!IMPORTANT]

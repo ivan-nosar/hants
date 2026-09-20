@@ -8,7 +8,7 @@ use crate::io::{read_input_bytes, write_output_bytes};
 pub fn run(args: Args) -> Result<(), String> {
     let alphabet = validate_alphabet(args.alphabet, args.complementary_symbols)?;
 
-    let padding_symbol = validate_padding_symbol(args.padding_symbol, &alphabet)?;
+    let padding_symbol = validate_padding_symbol(args.padding_symbol, args.no_pad, &alphabet)?;
 
     let alphabet_mapping = build_decoding_alphabet_mapping(&alphabet);
 
@@ -50,6 +50,7 @@ mod tests {
             alphabet: None,
             complementary_symbols: None,
             padding_symbol: '=',
+            no_pad: false,
         }
     }
 
@@ -148,6 +149,185 @@ mod tests {
         run(args).unwrap();
 
         assert_eq!(fs::read(path).unwrap(), b"f");
+    }
+
+    #[test]
+    fn decodes_unpadded_input_when_padding_is_disabled() {
+        for (payload, expected) in [
+            (b"Zg".as_slice(), b"f".as_slice()),
+            (b"Zm8", b"fo"),
+            (b"Zm9v", b"foo"),
+            (b"Zm9vYg", b"foob"),
+            (b"Zm9vYmE", b"fooba"),
+            (b"Zm9vYmFy", b"foobar"),
+        ] {
+            let dir = tempdir().unwrap();
+            let input = input_target(&dir, payload);
+            let (output, path) = output_target(&dir);
+            let mut args = args(input, output);
+            args.no_pad = true;
+
+            run(args).unwrap();
+
+            assert_eq!(fs::read(path).unwrap(), expected, "for {payload:02x?}");
+        }
+    }
+
+    #[test]
+    fn decodes_to_binary_file_output_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"FPucA9k");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), [0x14, 0xfb, 0x9c, 0x03, 0xd9]);
+    }
+
+    #[test]
+    fn decodes_empty_input_to_empty_output_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn ignores_whitespace_surrounding_the_payload_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"  Zm9vYmE \r\n");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"fooba");
+    }
+
+    #[test]
+    fn decodes_with_custom_alphabet_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"Pcy");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.alphabet = Some(DIGITS_FIRST_ALPHABET.to_string());
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"fo");
+    }
+
+    #[test]
+    fn decodes_with_complementary_symbols_without_padding() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"-_8");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.complementary_symbols = Some("-_".to_string());
+        args.no_pad = true;
+
+        run(args).unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), [0xfb, 0xff]);
+    }
+
+    #[test]
+    fn skips_padding_symbol_validation_when_padding_is_disabled() {
+        // Both symbols are rejected by `validate_padding_symbol` unless `--no-pad` short-circuits it.
+        for padding_symbol in ['+', '\n'] {
+            let dir = tempdir().unwrap();
+            let input = input_target(&dir, b"Zg");
+            let (output, path) = output_target(&dir);
+            let mut args = args(input, output);
+            args.padding_symbol = padding_symbol;
+            args.no_pad = true;
+
+            run(args).unwrap();
+
+            assert_eq!(fs::read(path).unwrap(), b"f", "for {padding_symbol:?}");
+        }
+    }
+
+    #[test]
+    fn round_trips_output_of_the_encode_command_without_padding() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let encoded = dir.path().join("encoded.txt");
+        let decoded = dir.path().join("decoded.bin");
+        // 256 is not a multiple of 3, so the encoded payload ends with an unpadded tail.
+        let payload: Vec<u8> = (0_u8..=255).collect();
+        fs::write(&source, &payload).unwrap();
+
+        let mut encode_args = args(IoTarget::File(source), IoTarget::File(encoded.clone()));
+        encode_args.no_pad = true;
+        encode::run(encode_args).unwrap();
+
+        let mut decode_args = args(IoTarget::File(encoded), IoTarget::File(decoded.clone()));
+        decode_args.no_pad = true;
+        run(decode_args).unwrap();
+
+        assert_eq!(fs::read(decoded).unwrap(), payload);
+    }
+
+    #[test]
+    fn returns_err_when_padded_input_is_decoded_with_padding_disabled() {
+        // The padding symbol is not part of the alphabet, so it is reported as an invalid symbol.
+        for payload in [b"Zg==".as_slice(), b"Zm8=", b"Zm9vYmE="] {
+            let dir = tempdir().unwrap();
+            let input = input_target(&dir, payload);
+            let (output, path) = output_target(&dir);
+            let mut args = args(input, output);
+            args.no_pad = true;
+
+            assert!(run(args).is_err(), "for {payload:02x?}");
+            assert!(!path.exists(), "no output must be produced on failure");
+        }
+    }
+
+    #[test]
+    fn returns_err_when_the_final_quantum_holds_a_single_symbol_and_padding_is_disabled() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"Zm9vY");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        assert!(run(args).is_err());
+        assert!(!path.exists(), "no output must be produced on failure");
+    }
+
+    #[test]
+    fn returns_err_when_input_has_non_zero_pad_bits_and_padding_is_disabled() {
+        // RFC 4648 section 3.5 still applies without padding: 'Zg' is the only spelling of "f".
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"Zh");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        assert!(run(args).is_err());
+        assert!(!path.exists(), "no output must be produced on failure");
+    }
+
+    #[test]
+    fn returns_err_when_input_contains_symbols_outside_the_alphabet_and_padding_is_disabled() {
+        let dir = tempdir().unwrap();
+        let input = input_target(&dir, b"Zm9v!mFy");
+        let (output, path) = output_target(&dir);
+        let mut args = args(input, output);
+        args.no_pad = true;
+
+        assert!(run(args).is_err());
+        assert!(!path.exists(), "no output must be produced on failure");
     }
 
     #[test]

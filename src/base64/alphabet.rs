@@ -78,7 +78,16 @@ pub fn validate_alphabet(
     }
 }
 
-pub fn validate_padding_symbol(padding_symbol: char, alphabet: &str) -> Result<u8, String> {
+pub fn validate_padding_symbol(
+    padding_symbol: char,
+    no_pad: bool,
+    alphabet: &str,
+) -> Result<Option<u8>, String> {
+    // `--no-pad` disables padding, so the padding symbol is not validated.
+    if no_pad {
+        return Ok(None);
+    }
+
     if !is_printable_character(padding_symbol) {
         return Err(format!(
             "padding symbol '{}' is a non-printable character",
@@ -93,7 +102,7 @@ pub fn validate_padding_symbol(padding_symbol: char, alphabet: &str) -> Result<u
         ));
     }
 
-    Ok(padding_symbol as u8)
+    Ok(Some(padding_symbol as u8))
 }
 
 pub fn build_encoding_alphabet_mapping(alphabet: &str) -> [u8; 64] {
@@ -371,8 +380,8 @@ mod tests {
     fn accepts_padding_symbol_outside_the_alphabet() {
         for symbol in ['=', '.', '*', '~', '!', ' ', '%', '-', '_'] {
             assert_eq!(
-                validate_padding_symbol(symbol, DEFAULT_ALPHABET).unwrap(),
-                symbol as u8
+                validate_padding_symbol(symbol, false, DEFAULT_ALPHABET).unwrap(),
+                Some(symbol as u8)
             );
         }
     }
@@ -380,19 +389,19 @@ mod tests {
     #[test]
     fn accepts_padding_symbol_at_printable_ascii_boundaries() {
         assert_eq!(
-            validate_padding_symbol(' ', DEFAULT_ALPHABET).unwrap(),
-            b' '
+            validate_padding_symbol(' ', false, DEFAULT_ALPHABET).unwrap(),
+            Some(b' ')
         );
         assert_eq!(
-            validate_padding_symbol('~', DEFAULT_ALPHABET).unwrap(),
-            b'~'
+            validate_padding_symbol('~', false, DEFAULT_ALPHABET).unwrap(),
+            Some(b'~')
         );
     }
 
     #[test]
     fn returns_err_when_padding_symbol_is_part_of_the_alphabet() {
         for symbol in ['A', 'Z', 'a', 'z', '0', '9', '+', '/'] {
-            let error = validate_padding_symbol(symbol, DEFAULT_ALPHABET).unwrap_err();
+            let error = validate_padding_symbol(symbol, false, DEFAULT_ALPHABET).unwrap_err();
 
             assert!(
                 error.contains("part of the alphabet"),
@@ -402,15 +411,15 @@ mod tests {
 
         // The same symbol is accepted once the alphabet no longer contains it.
         assert_eq!(
-            validate_padding_symbol('+', URL_SAFE_ALPHABET).unwrap(),
-            b'+'
+            validate_padding_symbol('+', false, URL_SAFE_ALPHABET).unwrap(),
+            Some(b'+')
         );
     }
 
     #[test]
     fn returns_err_when_padding_symbol_is_non_printable() {
         for symbol in ['\u{0}', '\t', '\n', '\r', '\u{1f}', '\u{7f}'] {
-            let error = validate_padding_symbol(symbol, DEFAULT_ALPHABET).unwrap_err();
+            let error = validate_padding_symbol(symbol, false, DEFAULT_ALPHABET).unwrap_err();
 
             assert!(error.contains("non-printable"), "for {symbol:?}: {error}");
         }
@@ -420,9 +429,61 @@ mod tests {
     fn returns_err_when_padding_symbol_is_non_ascii() {
         // 'Ł', 'Ľ' and 'ž' all truncate into printable ASCII under a lossy `as u8` cast.
         for symbol in ['\u{141}', '\u{13d}', '\u{17e}', '\u{1f4a9}'] {
-            let error = validate_padding_symbol(symbol, DEFAULT_ALPHABET).unwrap_err();
+            let error = validate_padding_symbol(symbol, false, DEFAULT_ALPHABET).unwrap_err();
 
             assert!(error.contains("non-printable"), "for {symbol:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn returns_no_padding_symbol_when_padding_is_disabled() {
+        for symbol in ['=', '.', '*', '~', '!', ' ', '%', '-', '_'] {
+            assert_eq!(
+                validate_padding_symbol(symbol, true, DEFAULT_ALPHABET).unwrap(),
+                None,
+                "for {symbol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_a_padding_symbol_that_is_part_of_the_alphabet_when_padding_is_disabled() {
+        for symbol in ['A', 'Z', 'a', 'z', '0', '9', '+', '/'] {
+            assert_eq!(
+                validate_padding_symbol(symbol, true, DEFAULT_ALPHABET).unwrap(),
+                None,
+                "for {symbol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_a_non_printable_padding_symbol_when_padding_is_disabled() {
+        for symbol in ['\u{0}', '\t', '\n', '\r', '\u{1f}', '\u{7f}'] {
+            assert_eq!(
+                validate_padding_symbol(symbol, true, DEFAULT_ALPHABET).unwrap(),
+                None,
+                "for {symbol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_a_non_ascii_padding_symbol_when_padding_is_disabled() {
+        for symbol in ['\u{141}', '\u{13d}', '\u{17e}', '\u{1f4a9}'] {
+            assert_eq!(
+                validate_padding_symbol(symbol, true, DEFAULT_ALPHABET).unwrap(),
+                None,
+                "for {symbol:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_the_alphabet_entirely_when_padding_is_disabled() {
+        // The alphabet is never inspected on the `--no-pad` path, not even a malformed one.
+        for alphabet in [DEFAULT_ALPHABET, URL_SAFE_ALPHABET, "", "not-an-alphabet"] {
+            assert_eq!(validate_padding_symbol('=', true, alphabet).unwrap(), None);
         }
     }
 
